@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { EventStore } from './store';
+import { buildTimeline } from './timeline';
 import { verifyFix } from './verify-fix';
 import type { WsIngestServer } from './ws-server';
 
@@ -64,7 +65,7 @@ export function createMcpServer(
         'Query captured runtime events (errors, console output, network requests, ' +
         'lifecycle), newest first. Filter by type and time to keep responses small.',
       inputSchema: {
-        type: z.enum(['error', 'console', 'network', 'lifecycle']).optional(),
+        type: z.enum(['error', 'console', 'network', 'lifecycle', 'interaction']).optional(),
         sessionId: z.string().optional().describe('Only events from this page session'),
         sinceMs: z
           .number()
@@ -84,6 +85,52 @@ export function createMcpServer(
           ...(args.limit !== undefined && { limit: args.limit }),
         }),
       ),
+  );
+
+  server.registerTool(
+    'get_interaction_timeline',
+    {
+      title: 'Get interaction timeline',
+      description:
+        'Cause-and-effect view of recent activity: user interactions (clicks, inputs, ' +
+        'submits — each with the source location of the element) grouped with the ' +
+        'errors, requests and logs they triggered. Use this to answer "what did the ' +
+        'user do to cause this error?". Events outside any interaction window appear ' +
+        'under "background".',
+      inputSchema: {
+        sessionId: z
+          .string()
+          .optional()
+          .describe('Scope to a page session; defaults to the most recently active one'),
+        sinceMs: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Only consider events newer than this epoch-milliseconds timestamp'),
+        windowMs: z
+          .number()
+          .int()
+          .min(100)
+          .max(30_000)
+          .optional()
+          .describe('Attribution window after each interaction. Defaults to 3000.'),
+      },
+    },
+    (args) => {
+      const sessionId = args.sessionId ?? store.listSessions()[0]?.sessionId;
+      const events = store.query({
+        limit: 200,
+        ...(sessionId !== undefined && { sessionId }),
+        ...(args.sinceMs !== undefined && { sinceMs: args.sinceMs }),
+      });
+      return jsonResult({
+        sessionId: sessionId ?? null,
+        ...buildTimeline(events, {
+          ...(args.windowMs !== undefined && { windowMs: args.windowMs }),
+        }),
+      });
+    },
   );
 
   server.registerTool(

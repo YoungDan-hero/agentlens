@@ -231,6 +231,20 @@ async function main() {
       'snapshot: visible button with source attribution and a real box',
     );
 
+    // Interaction timeline: the uncaught error must be attributed to the
+    // click on #btn-error, turning the flat stream into cause-and-effect.
+    const timeline = await client.callTool('get_interaction_timeline');
+    const errorGroup = timeline.groups.find((g) => g.interaction.target.id === 'btn-error');
+    assert(
+      errorGroup !== undefined &&
+        /^src\/App\.tsx:\d+$/.test(errorGroup.interaction.target.source ?? ''),
+      'timeline: click on #btn-error recorded with source attribution',
+    );
+    assert(
+      errorGroup?.effects.some((e) => e.type === 'error' && e.subtype === 'uncaught') === true,
+      'timeline: uncaught error attributed to the click that caused it',
+    );
+
     console.log('6/6 Verifying the fix loop (verify_fix + real HMR)...');
     const uncaught = errors.find((e) => e.subtype === 'uncaught');
     assert(

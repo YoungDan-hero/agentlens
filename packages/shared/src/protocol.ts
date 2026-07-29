@@ -5,7 +5,7 @@
  * ends can narrow payloads without casting.
  */
 
-export type AgentLensEventType = 'error' | 'console' | 'network' | 'lifecycle';
+export type AgentLensEventType = 'error' | 'console' | 'network' | 'lifecycle' | 'interaction';
 
 export interface BaseEvent {
   /** Unique event id (UUID v4). */
@@ -73,7 +73,24 @@ export interface LifecycleEvent extends BaseEvent {
   phase: 'load' | 'navigation' | 'hmr-update' | 'unload';
 }
 
-export type AgentLensEvent = ErrorEvent | ConsoleEvent | NetworkEvent | LifecycleEvent;
+/** Compact description of the element a user interacted with. */
+export interface InteractionTarget {
+  tag: string;
+  id: string | null;
+  /** Visible text of the element, trimmed and truncated. */
+  text: string | null;
+  /** Source attribution (`file:line`) of the element or its nearest tagged ancestor. */
+  source: string | null;
+}
+
+export interface InteractionEvent extends BaseEvent {
+  type: 'interaction';
+  subtype: 'click' | 'input' | 'submit';
+  target: InteractionTarget;
+}
+
+export type AgentLensEvent =
+  ErrorEvent | ConsoleEvent | NetworkEvent | LifecycleEvent | InteractionEvent;
 
 /** Envelope sent over the WebSocket connection. */
 export interface ProtocolMessage {
@@ -140,7 +157,13 @@ export function isSnapshotResponse(value: unknown): value is SnapshotResponse {
   );
 }
 
-const EVENT_TYPES: readonly AgentLensEventType[] = ['error', 'console', 'network', 'lifecycle'];
+const EVENT_TYPES: readonly AgentLensEventType[] = [
+  'error',
+  'console',
+  'network',
+  'lifecycle',
+  'interaction',
+];
 
 function isEventType(value: unknown): value is AgentLensEventType {
   return typeof value === 'string' && (EVENT_TYPES as readonly string[]).includes(value);

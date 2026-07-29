@@ -3,6 +3,7 @@ import type { SnapshotResponse } from '@agentlensjs/shared';
 
 import { installConsoleCollector } from './collectors/console';
 import { installErrorCollector } from './collectors/errors';
+import { installInteractionCollector } from './collectors/interactions';
 import { installNetworkCollector } from './collectors/network';
 import type { EventContext } from './events';
 import { buildLifecycleEvent } from './events';
@@ -70,6 +71,7 @@ export function init(options: InitOptions = {}): AgentLensClient {
     installErrorCollector(transport, context),
     installConsoleCollector(transport, context),
     installNetworkCollector(transport, context),
+    installInteractionCollector(transport, context),
   ];
 
   transport.send(buildLifecycleEvent(context, 'load'));

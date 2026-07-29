@@ -2,6 +2,8 @@ import type {
   ConsoleEvent,
   ConsoleLevel,
   ErrorEvent,
+  InteractionEvent,
+  InteractionTarget,
   LifecycleEvent,
   NetworkEvent,
 } from '@agentlensjs/shared';
@@ -75,6 +77,19 @@ export function buildNetworkEvent(
     initiatorStack: input.initiatorStack,
     // Source-map resolution happens in the daemon; the browser ships raw stacks.
     initiatorFrames: [],
+  };
+}
+
+export function buildInteractionEvent(
+  context: EventContext,
+  subtype: InteractionEvent['subtype'],
+  target: InteractionTarget,
+): InteractionEvent {
+  return {
+    ...baseFields(context),
+    type: 'interaction',
+    subtype,
+    target,
   };
 }
 
