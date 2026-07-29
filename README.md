@@ -2,7 +2,7 @@
 
 > DevTools for AI Agents — a runtime feedback layer that gives AI coding agents eyes into the browser.
 
-[![CI](https://github.com/agentlens/agentlens/actions/workflows/ci.yml/badge.svg)](https://github.com/agentlens/agentlens/actions/workflows/ci.yml)
+[![CI](https://github.com/YoungDan-hero/agentlens/actions/workflows/ci.yml/badge.svg)](https://github.com/YoungDan-hero/agentlens/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
 AI coding agents can write frontend code, but they cannot see what happens in the browser. When a page throws, renders blank, or a request fails, the agent has to guess. AgentLens closes that loop: it captures runtime signals (errors, console output, network activity) during development and exposes them to any MCP-compatible agent (Cursor, Claude Code, ...) with source-level attribution.
@@ -64,7 +64,7 @@ pnpm build && pnpm --filter react-demo e2e
 
 ## Development
 
-Requires Node.js >= 20.19 and [pnpm](https://pnpm.io).
+Requires Node.js >= 22.13 (pnpm 11 depends on the `node:sqlite` builtin) and [pnpm](https://pnpm.io).
 
 ```bash
 pnpm install

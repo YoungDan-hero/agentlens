@@ -15,8 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # pnpm 11 requires Node >= 22.13 (uses the node:sqlite builtin).
       matrix:
-        node: [20, 24]
+        node: [22, 24]
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -14,4 +14,4 @@ export default defineConfig({
 });
 ```
 
-See the [AgentLens monorepo](https://github.com/agentlens/agentlens) for full documentation.
+See the [AgentLens monorepo](https://github.com/YoungDan-hero/agentlens) for full documentation.

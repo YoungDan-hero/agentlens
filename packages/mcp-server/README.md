@@ -31,4 +31,4 @@ Register it in your MCP client (e.g. Cursor's `mcp.json`):
 | ---------------- | ------- | ------------------------------------------------------------ |
 | `AGENTLENS_PORT` | `8631`  | WebSocket port the daemon listens on for runtime connections |
 
-See the [AgentLens monorepo](https://github.com/agentlens/agentlens) for full documentation.
+See the [AgentLens monorepo](https://github.com/YoungDan-hero/agentlens) for full documentation.

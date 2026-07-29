@@ -4,13 +4,13 @@ Thanks for your interest in contributing! This document describes the developmen
 
 ## Prerequisites
 
-- Node.js >= 20.19
+- Node.js >= 22.13 (pnpm 11 depends on the `node:sqlite` builtin)
 - [pnpm](https://pnpm.io) (version pinned in the `packageManager` field of `package.json`)
 
 ## Getting started
 
 ```bash
-git clone https://github.com/agentlens/agentlens.git
+git clone https://github.com/YoungDan-hero/agentlens.git
 cd agentlens
 pnpm install
 pnpm build

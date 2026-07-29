@@ -8,4 +8,4 @@ In-browser collector SDK for AgentLens. Captures runtime signals during developm
 
 Development-only by design: it is injected by `@agentlens/vite-plugin` in `serve` mode and adds zero overhead to production builds.
 
-See the [AgentLens monorepo](https://github.com/agentlens/agentlens) for full documentation.
+See the [AgentLens monorepo](https://github.com/YoungDan-hero/agentlens) for full documentation.
