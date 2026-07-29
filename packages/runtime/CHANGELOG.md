@@ -1,5 +1,11 @@
 # @agentlensjs/runtime
 
+## 0.4.1
+
+### Patch Changes
+
+- 修复非安全上下文下初始化崩溃：`crypto.randomUUID` 仅存在于 https / localhost 等安全上下文，通过局域网 IP 以纯 http 访问 dev server 时会抛 "crypto.randomUUID is not a function"。新增 `generateId` 降级链——优先 `randomUUID`，否则用 `getRandomValues`（非安全上下文可用）生成 RFC 4122 v4 UUID，最后兜底 `Math.random`
+
 ## 0.4.0
 
 ### Minor Changes

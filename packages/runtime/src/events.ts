@@ -8,6 +8,8 @@ import type {
   NetworkEvent,
 } from '@agentlensjs/shared';
 
+import { generateId } from './uuid';
+
 export interface EventContext {
   sessionId: string;
   url: string;
@@ -17,7 +19,7 @@ function baseFields(
   context: EventContext,
 ): Pick<ErrorEvent, 'id' | 'timestamp' | 'sessionId' | 'url'> {
   return {
-    id: crypto.randomUUID(),
+    id: generateId(),
     timestamp: Date.now(),
     sessionId: context.sessionId,
     url: context.url,

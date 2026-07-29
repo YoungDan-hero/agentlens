@@ -10,6 +10,7 @@ import type { EventContext } from './events';
 import { buildLifecycleEvent } from './events';
 import { captureLayoutSnapshot } from './snapshot';
 import { Transport } from './transport';
+import { generateId } from './uuid';
 
 export interface InitOptions {
   /** Override the daemon WebSocket endpoint. Defaults to `ws://localhost:8631/agentlens`. */
@@ -45,7 +46,7 @@ export function init(options: InitOptions = {}): AgentLensClient {
 
   const endpoint = options.endpoint ?? `ws://localhost:${String(DEFAULT_WS_PORT)}${WS_PATH}`;
   const context: EventContext = {
-    sessionId: crypto.randomUUID(),
+    sessionId: generateId(),
     // Read lazily so SPA route changes are reflected in every event's url.
     get url() {
       return window.location.href;
