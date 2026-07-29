@@ -1,5 +1,11 @@
 # @agentlensjs/vite-plugin
 
+## 0.4.1
+
+### Patch Changes
+
+- 放宽 vite 对等依赖下限至 `>=4.0.0`。插件使用的全部 Vite API（configResolved、transform、虚拟模块、transformIndexHtml 标签注入、vite:afterUpdate HMR 事件）在 Vite 4 中均可用，原 `>=5.0.0` 的限制过于保守，导致 Vite 4 项目安装时报 ERESOLVE 冲突
+
 ## 0.4.0
 
 ### Minor Changes
