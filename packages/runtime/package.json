@@ -1,0 +1,47 @@
+{
+  "name": "@agentlens/runtime",
+  "version": "0.0.0",
+  "description": "In-browser collector SDK for AgentLens — captures errors, console and network signals during development.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agentlens/shared": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agentlens/agentlens.git",
+    "directory": "packages/runtime"
+  },
+  "keywords": [
+    "agentlens",
+    "mcp",
+    "ai-agent",
+    "devtools",
+    "error-monitoring"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

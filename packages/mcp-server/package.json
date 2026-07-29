@@ -1,0 +1,53 @@
+{
+  "name": "@agentlens/mcp-server",
+  "version": "0.0.0",
+  "description": "AgentLens daemon — collects browser runtime signals and exposes them to AI agents over the Model Context Protocol.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "agentlens-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agentlens/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ws": "^8.21.1",
+    "zod": "^4.4.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agentlens/agentlens.git",
+    "directory": "packages/mcp-server"
+  },
+  "keywords": [
+    "agentlens",
+    "mcp",
+    "mcp-server",
+    "ai-agent",
+    "devtools"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}

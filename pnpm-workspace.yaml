@@ -1,0 +1,7 @@
+packages:
+  - packages/*
+
+# Dependency build scripts must be explicitly allowed (pnpm >= 11).
+allowBuilds:
+  esbuild: true
+  simple-git-hooks: true
