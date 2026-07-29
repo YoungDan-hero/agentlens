@@ -1,4 +1,10 @@
-import type { ConsoleEvent, ConsoleLevel, ErrorEvent, LifecycleEvent } from '@agentlens/shared';
+import type {
+  ConsoleEvent,
+  ConsoleLevel,
+  ErrorEvent,
+  LifecycleEvent,
+  NetworkEvent,
+} from '@agentlens/shared';
 
 export interface EventContext {
   sessionId: string;
@@ -45,6 +51,27 @@ export function buildConsoleEvent(
     type: 'console',
     level,
     args: args.map(serializeArg),
+  };
+}
+
+export function buildNetworkEvent(
+  context: EventContext,
+  input: {
+    method: string;
+    requestUrl: string;
+    status: number | null;
+    durationMs: number;
+    initiatorStack: string | null;
+  },
+): NetworkEvent {
+  return {
+    ...baseFields(context),
+    type: 'network',
+    method: input.method,
+    requestUrl: input.requestUrl,
+    status: input.status,
+    durationMs: input.durationMs,
+    initiatorStack: input.initiatorStack,
   };
 }
 

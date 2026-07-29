@@ -1,15 +1,15 @@
 import type { EventContext } from '../events';
 import { buildErrorEvent } from '../events';
-import type { Transport } from '../transport';
+import type { EventSink } from '../transport';
 
 /**
  * Captures uncaught exceptions and unhandled promise rejections.
  * Returns a teardown function so HMR updates can re-install cleanly.
  */
-export function installErrorCollector(transport: Transport, context: EventContext): () => void {
+export function installErrorCollector(sink: EventSink, context: EventContext): () => void {
   const onError = (event: globalThis.ErrorEvent): void => {
     const error: unknown = event.error;
-    transport.send(
+    sink.send(
       buildErrorEvent(context, {
         subtype: 'uncaught',
         message: event.message,
@@ -21,7 +21,7 @@ export function installErrorCollector(transport: Transport, context: EventContex
   const onRejection = (event: PromiseRejectionEvent): void => {
     const reason: unknown = event.reason;
     const message = reason instanceof Error ? reason.message : String(reason);
-    transport.send(
+    sink.send(
       buildErrorEvent(context, {
         subtype: 'unhandledrejection',
         message,

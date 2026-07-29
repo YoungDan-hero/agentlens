@@ -1,6 +1,11 @@
 import type { AgentLensEvent, ProtocolMessage } from '@agentlens/shared';
 import { PROTOCOL_VERSION } from '@agentlens/shared';
 
+/** Anything that can receive events; lets collectors be tested in isolation. */
+export interface EventSink {
+  send: (event: AgentLensEvent) => void;
+}
+
 export interface TransportOptions {
   /** Full WebSocket endpoint, e.g. `ws://localhost:8631/agentlens`. */
   endpoint: string;
@@ -17,7 +22,7 @@ const RECONNECT_MAX_DELAY_MS = 15_000;
  * Events emitted while disconnected are queued and flushed on reconnect,
  * so signals produced during daemon restarts are not lost.
  */
-export class Transport {
+export class Transport implements EventSink {
   private socket: WebSocket | null = null;
   private queue: AgentLensEvent[] = [];
   private reconnectAttempts = 0;

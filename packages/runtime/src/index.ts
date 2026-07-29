@@ -1,6 +1,8 @@
 import { DEFAULT_WS_PORT, WS_PATH } from '@agentlens/shared';
 
+import { installConsoleCollector } from './collectors/console';
 import { installErrorCollector } from './collectors/errors';
+import { installNetworkCollector } from './collectors/network';
 import type { EventContext } from './events';
 import { buildLifecycleEvent } from './events';
 import { Transport } from './transport';
@@ -38,7 +40,11 @@ export function init(options: InitOptions = {}): AgentLensClient {
   };
 
   const transport = new Transport({ endpoint });
-  const teardowns = [installErrorCollector(transport, context)];
+  const teardowns = [
+    installErrorCollector(transport, context),
+    installConsoleCollector(transport, context),
+    installNetworkCollector(transport, context),
+  ];
 
   transport.send(buildLifecycleEvent(context, 'load'));
 

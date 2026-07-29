@@ -15,6 +15,18 @@ export interface WsIngestServer {
 export function startWsIngestServer(store: EventStore, port: number): WsIngestServer {
   const wss = new WebSocketServer({ port, path: WS_PATH });
 
+  wss.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(
+        `[agentlens] port ${String(port)} is already in use — ` +
+          'is another AgentLens daemon running? Stop it or set AGENTLENS_PORT.',
+      );
+    } else {
+      console.error('[agentlens] ingest server error:', error);
+    }
+    process.exit(1);
+  });
+
   wss.on('connection', (socket) => {
     socket.on('message', (raw) => {
       let message: unknown;

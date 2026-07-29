@@ -1,5 +1,6 @@
 packages:
   - packages/*
+  - examples/*
 
 # Dependency build scripts must be explicitly allowed (pnpm >= 11).
 allowBuilds:

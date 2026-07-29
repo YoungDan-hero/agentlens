@@ -56,6 +56,12 @@ export default defineConfig({
 
 3. Run `vite dev`, then ask your agent: _"Does the page have any errors right now?"_
 
+A ready-to-run example lives in [`examples/react-demo`](./examples/react-demo), including an automated end-to-end check:
+
+```bash
+pnpm build && pnpm --filter react-demo e2e
+```
+
 ## Development
 
 Requires Node.js >= 20.19 and [pnpm](https://pnpm.io).
@@ -72,7 +78,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow.
 
 ## Roadmap
 
-- [x] M1 — error / console / network capture, `get_page_health`, `get_recent_events`
+- [x] M1 — error / console / network capture, `get_page_health`, `get_recent_events`, E2E-verified chain
 - [ ] M2 — structured layout snapshots, `data-source` attribution, `verify_fix`
 - [ ] M3 — component tree & render statistics (React / Vue), interaction timeline
 
