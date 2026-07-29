@@ -126,6 +126,14 @@ async function main() {
     await page.reload({ waitUntil: 'networkidle' });
     await sleep(500);
 
+    // Source attribution: the vite plugin must tag host elements with the
+    // original source location before the framework compiles the JSX.
+    const sourceAttr = await page.getAttribute('#btn-error', 'data-agentlens-source');
+    assert(
+      /^src\/App\.tsx:\d+$/.test(sourceAttr ?? ''),
+      `attribution: DOM element traced to source (got ${String(sourceAttr)})`,
+    );
+
     for (const id of ['btn-error', 'btn-rejection', 'btn-console', 'btn-404', 'btn-network-fail']) {
       await page.click(`#${id}`);
       await sleep(200);

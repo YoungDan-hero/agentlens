@@ -1,6 +1,10 @@
 import { DEFAULT_WS_PORT, WS_PATH } from '@agentlensjs/shared';
 import type { Plugin } from 'vite';
 
+import { injectSourceAttributes } from './attribute-injector';
+
+export { SOURCE_ATTRIBUTE, injectSourceAttributes } from './attribute-injector';
+
 export interface AgentLensPluginOptions {
   /**
    * Port of the local AgentLens daemon.
@@ -26,9 +30,35 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
   const port = options.port ?? DEFAULT_WS_PORT;
   const endpoint = `ws://localhost:${String(port)}${WS_PATH}`;
 
+  let root = process.cwd();
+
   return {
     name: 'agentlens',
     apply: 'serve',
+    // Must transform JSX before the framework plugin compiles it away.
+    enforce: 'pre',
+
+    configResolved(config) {
+      root = config.root;
+    },
+
+    transform(code, id) {
+      if (!enabled) {
+        return undefined;
+      }
+      const [file = ''] = id.split('?');
+      if (!/\.[jt]sx$/.test(file) || file.includes('/node_modules/')) {
+        return undefined;
+      }
+      const normalizedRoot = root.endsWith('/') ? root : `${root}/`;
+      const fileName = file.startsWith(normalizedRoot) ? file.slice(normalizedRoot.length) : file;
+      const result = injectSourceAttributes(code, fileName);
+      if (!result) {
+        return undefined;
+      }
+      // Serialized map sidesteps magic-string/vite SourceMap type mismatches.
+      return { code: result.code, map: result.map.toString() };
+    },
 
     resolveId(id) {
       if (id === VIRTUAL_MODULE_ID) {

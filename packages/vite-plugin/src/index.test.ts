@@ -44,4 +44,33 @@ describe('agentlens vite plugin', () => {
     const tags = callHook(plugin.transformIndexHtml) as HtmlTagDescriptor[] | undefined;
     expect(tags).toBeUndefined();
   });
+
+  it('runs before framework plugins so it sees raw JSX', () => {
+    expect(agentlens().enforce).toBe('pre');
+  });
+
+  it('injects source attributes into jsx modules relative to the vite root', () => {
+    const plugin = agentlens();
+    callHook(plugin.configResolved, { root: '/repo/app' });
+
+    const result = callHook(
+      plugin.transform,
+      'export const A = () => <div />;',
+      '/repo/app/src/A.tsx',
+    ) as { code: string } | undefined;
+    expect(result?.code).toContain('data-agentlens-source="src/A.tsx:1"');
+  });
+
+  it('ignores non-jsx files, node_modules and disabled mode', () => {
+    const plugin = agentlens();
+    callHook(plugin.configResolved, { root: '/repo/app' });
+    const jsx = 'export const A = () => <div />;';
+
+    expect(callHook(plugin.transform, 'const n = 1;', '/repo/app/src/n.ts')).toBeUndefined();
+    expect(callHook(plugin.transform, jsx, '/repo/app/node_modules/lib/x.tsx')).toBeUndefined();
+
+    const disabled = agentlens({ enabled: false });
+    callHook(disabled.configResolved, { root: '/repo/app' });
+    expect(callHook(disabled.transform, jsx, '/repo/app/src/A.tsx')).toBeUndefined();
+  });
 });

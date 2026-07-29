@@ -14,4 +14,11 @@ export default defineConfig({
 });
 ```
 
+## What it does in dev mode
+
+- **Runtime injection** — loads the `@agentlensjs/runtime` collector via a virtual module and reports HMR updates so the daemon's `verify_fix` tool can close the loop.
+- **Source attribution** — tags every host element in your JSX with `data-agentlens-source="src/App.tsx:42"`, so any DOM node can be traced back to the exact file and line that rendered it. Component tags are left untouched.
+
+Both apply only to the dev server; production builds are unaffected.
+
 See the [AgentLens monorepo](https://github.com/YoungDan-hero/agentlens) for full documentation.
