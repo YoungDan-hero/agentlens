@@ -20,6 +20,10 @@ function fakeApi(): Plugin {
   };
 }
 
+// Lets the E2E pipeline point the runtime at an isolated daemon instance
+// without disturbing a developer's default setup.
+const daemonPort = process.env.AGENTLENS_PORT ? Number(process.env.AGENTLENS_PORT) : undefined;
+
 export default defineConfig({
-  plugins: [react(), agentlens(), fakeApi()],
+  plugins: [react(), agentlens(daemonPort === undefined ? {} : { port: daemonPort }), fakeApi()],
 });

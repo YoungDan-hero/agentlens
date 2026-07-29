@@ -54,6 +54,8 @@ export interface NetworkEvent extends BaseEvent {
   durationMs: number;
   /** Stack captured at request initiation, used to attribute the caller. */
   initiatorStack: string | null;
+  /** Source-mapped initiator frames, filled in by the daemon after ingest. */
+  initiatorFrames: StackFrame[];
 }
 
 export interface LifecycleEvent extends BaseEvent {

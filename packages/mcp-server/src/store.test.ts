@@ -34,6 +34,7 @@ function makeNetwork(status: number | null): NetworkEvent {
     status,
     durationMs: 12,
     initiatorStack: null,
+    initiatorFrames: [],
   };
 }
 

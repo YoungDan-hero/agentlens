@@ -1,7 +1,8 @@
 import { isAgentLensEvent, PROTOCOL_VERSION, WS_PATH } from '@agentlens/shared';
-import type { ProtocolMessage } from '@agentlens/shared';
+import type { AgentLensEvent, ProtocolMessage } from '@agentlens/shared';
 import { WebSocketServer } from 'ws';
 
+import type { StackResolver } from './stack-resolver';
 import type { EventStore } from './store';
 
 export interface WsIngestServer {
@@ -9,10 +10,31 @@ export interface WsIngestServer {
 }
 
 /**
+ * Resolves raw stacks to source coordinates after the event is stored.
+ * Runs asynchronously and mutates the stored event in place, so queries
+ * stay fast and pick up frames as soon as resolution completes.
+ */
+function resolveStacks(event: AgentLensEvent, resolver: StackResolver): void {
+  if (event.type === 'error') {
+    void resolver.resolve(event.stack).then((frames) => {
+      event.frames = frames;
+    });
+  } else if (event.type === 'network') {
+    void resolver.resolve(event.initiatorStack).then((frames) => {
+      event.initiatorFrames = frames;
+    });
+  }
+}
+
+/**
  * Accepts WebSocket connections from `@agentlens/runtime` instances and
  * ingests their event batches into the store.
  */
-export function startWsIngestServer(store: EventStore, port: number): WsIngestServer {
+export function startWsIngestServer(
+  store: EventStore,
+  port: number,
+  resolver?: StackResolver,
+): WsIngestServer {
   const wss = new WebSocketServer({ port, path: WS_PATH });
 
   wss.on('error', (error: NodeJS.ErrnoException) => {
@@ -41,6 +63,9 @@ export function startWsIngestServer(store: EventStore, port: number): WsIngestSe
       }
       for (const event of message.events) {
         store.add(event);
+        if (resolver) {
+          resolveStacks(event, resolver);
+        }
       }
     });
   });

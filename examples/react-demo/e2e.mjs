@@ -5,7 +5,11 @@ import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 
-const DEMO_URL = 'http://localhost:5273/';
+// Dedicated ports so the pipeline never collides with a developer's running
+// dev server (5273) or a Cursor-managed daemon (8631).
+const VITE_PORT = '5274';
+const DAEMON_PORT = '8632';
+const DEMO_URL = `http://localhost:${VITE_PORT}/`;
 const DAEMON_ENTRY = new URL('../../packages/mcp-server/dist/index.js', import.meta.url).pathname;
 const DEMO_DIR = new URL('.', import.meta.url).pathname;
 
@@ -88,16 +92,24 @@ function assert(condition, label) {
 
 async function main() {
   console.log('1/5 Starting AgentLens daemon...');
-  const daemon = spawn('node', [DAEMON_ENTRY], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const daemon = spawn('node', [DAEMON_ENTRY], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, AGENTLENS_PORT: DAEMON_PORT },
+  });
   daemon.stderr.on('data', (d) => process.stdout.write(`      [daemon] ${d}`));
 
   console.log('2/5 Starting Vite dev server...');
   // Spawn the vite entry directly (not via `pnpm exec`) so kill() reaches
   // the actual server process instead of a wrapper.
-  const vite = spawn('node', ['node_modules/vite/bin/vite.js', '--strictPort', '--port', '5273'], {
-    cwd: DEMO_DIR,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const vite = spawn(
+    'node',
+    ['node_modules/vite/bin/vite.js', '--strictPort', '--port', VITE_PORT],
+    {
+      cwd: DEMO_DIR,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, AGENTLENS_PORT: DAEMON_PORT },
+    },
+  );
   await waitForHttp(DEMO_URL, 30_000);
 
   console.log('3/5 Launching headless Chrome and triggering signals...');
@@ -135,7 +147,15 @@ async function main() {
     }
     console.log(`      health = ${JSON.stringify(health)}`);
 
-    const errors = await client.callTool('get_recent_events', { type: 'error' });
+    // Source-map resolution runs asynchronously after ingest; poll until
+    // the error frames have been filled in.
+    let errors = await client.callTool('get_recent_events', { type: 'error' });
+    const framesDeadline = Date.now() + 10_000;
+    while (!errors.some((e) => e.frames.length > 0) && Date.now() < framesDeadline) {
+      await sleep(500);
+      errors = await client.callTool('get_recent_events', { type: 'error' });
+    }
+
     const consoles = await client.callTool('get_recent_events', { type: 'console' });
     const network = await client.callTool('get_recent_events', { type: 'network' });
     const lifecycle = await client.callTool('get_recent_events', { type: 'lifecycle' });
@@ -164,6 +184,14 @@ async function main() {
     assert(
       network.some((e) => e.requestUrl.includes('unreachable.invalid') && e.status === null),
       'network: transport failure captured with null status',
+    );
+    assert(
+      errors.some((e) => e.frames.some((f) => f.fileName?.includes('App.tsx') && f.line > 0)),
+      'sourcemap: error stack resolved to original source (App.tsx)',
+    );
+    assert(
+      network.some((e) => e.initiatorFrames.some((f) => f.fileName?.includes('App.tsx'))),
+      'sourcemap: network initiator resolved to original source',
     );
     assert(health.errorCount >= 2, `health: errorCount >= 2 (got ${health.errorCount})`);
     assert(

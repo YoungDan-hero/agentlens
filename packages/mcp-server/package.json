@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@agentlens/shared": "workspace:*",
+    "@jridgewell/trace-mapping": "^0.3.31",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "ws": "^8.21.1",
     "zod": "^4.4.3"
@@ -48,6 +49,7 @@
     "access": "public"
   },
   "devDependencies": {
+    "@jridgewell/gen-mapping": "^0.3.13",
     "@types/ws": "^8.18.1"
   }
 }

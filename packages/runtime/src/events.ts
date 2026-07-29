@@ -72,6 +72,8 @@ export function buildNetworkEvent(
     status: input.status,
     durationMs: input.durationMs,
     initiatorStack: input.initiatorStack,
+    // Source-map resolution happens in the daemon; the browser ships raw stacks.
+    initiatorFrames: [],
   };
 }
 

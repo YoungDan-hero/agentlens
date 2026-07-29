@@ -93,6 +93,9 @@ importers:
       '@agentlens/shared':
         specifier: workspace:*
         version: link:../shared
+      '@jridgewell/trace-mapping':
+        specifier: ^0.3.31
+        version: 0.3.31
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@4.4.3)
@@ -103,6 +106,9 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
+      '@jridgewell/gen-mapping':
+        specifier: ^0.3.13
+        version: 0.3.13
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1

@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { DEFAULT_WS_PORT } from '@agentlens/shared';
 
 import { createMcpServer } from './mcp';
+import { StackResolver } from './stack-resolver';
 import { EventStore } from './store';
 import { startWsIngestServer } from './ws-server';
 
@@ -11,7 +12,7 @@ const VERSION = '0.0.0';
 async function main(): Promise<void> {
   const port = resolvePort();
   const store = new EventStore();
-  const ingest = startWsIngestServer(store, port);
+  const ingest = startWsIngestServer(store, port, new StackResolver());
 
   const server = createMcpServer(store, VERSION);
   await server.connect(new StdioServerTransport());
