@@ -1,5 +1,11 @@
 # @agentlensjs/vite-plugin
 
+## 0.4.2
+
+### Patch Changes
+
+- 修复只安装插件时虚拟模块无法解析 runtime 的问题。`@agentlensjs/runtime` 现在是插件的直接依赖，虚拟模块改为通过 `@agentlensjs/vite-plugin/runtime` 真实文件入口转发导入——虚拟模块没有磁盘位置，裸导入只能从项目根解析（用户项目未安装 runtime 时报 "Failed to resolve import"）；从插件自身的真实文件转发后，解析顺着插件的依赖链完成，npm/pnpm/yarn 均可用，用户只需安装 `@agentlensjs/vite-plugin` 一个包
+
 ## 0.4.1
 
 ### Patch Changes

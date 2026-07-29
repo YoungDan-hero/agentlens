@@ -108,7 +108,7 @@ daemon 随 Agent 自动启动，在 `ws://localhost:8631` 监听浏览器连接�
 
 ### 第三步：正常开发
 
-运行 `vite dev` 并打开页面，runtime 会自动连接 daemon。然后就可以直接问 Agent：
+运行 `npm run dev`（即项目里启动 Vite 开发服务器的脚本）并打开页面，runtime 会自动连接 daemon。然后就可以直接问 Agent：
 
 - _"页面现在有报错吗？"_
 - _"我刚才点结账按钮的时候发生了什么？"_

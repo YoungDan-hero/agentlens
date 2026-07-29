@@ -108,7 +108,7 @@ The daemon starts automatically with your agent and listens for browser connecti
 
 ### 3. Develop as usual
 
-Run `vite dev` and open the page. The runtime connects to the daemon automatically. Then ask your agent things like:
+Run `npm run dev` (your project's Vite dev-server script) and open the page. The runtime connects to the daemon automatically. Then ask your agent things like:
 
 - _"Does the page have any errors right now?"_
 - _"What happened when I clicked the checkout button?"_

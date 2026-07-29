@@ -10,7 +10,6 @@
     "e2e": "node e2e.mjs"
   },
   "dependencies": {
-    "@agentlensjs/runtime": "workspace:*",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

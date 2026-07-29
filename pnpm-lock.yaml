@@ -62,9 +62,6 @@ importers:
 
   examples/react-demo:
     dependencies:
-      '@agentlensjs/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       react:
         specifier: ^19.2.8
         version: 19.2.8
@@ -126,6 +123,9 @@ importers:
 
   packages/vite-plugin:
     dependencies:
+      '@agentlensjs/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@agentlensjs/shared':
         specifier: workspace:*
         version: link:../shared

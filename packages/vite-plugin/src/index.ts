@@ -73,7 +73,8 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
         return undefined;
       }
       return [
-        `import { init } from '@agentlensjs/runtime';`,
+        // Resolved through this package's own dependency tree; see runtime.ts.
+        `import { init } from '@agentlensjs/vite-plugin/runtime';`,
         `const client = init({ endpoint: ${JSON.stringify(endpoint)} });`,
         `if (import.meta.hot) {`,
         `  import.meta.hot.on('vite:afterUpdate', () => {`,
