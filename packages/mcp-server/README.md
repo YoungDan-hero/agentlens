@@ -19,10 +19,11 @@ Register it in your MCP client (e.g. Cursor's `mcp.json`):
 
 ### Tools
 
-| Tool                | Purpose                                                                    |
-| ------------------- | -------------------------------------------------------------------------- |
-| `get_page_health`   | Cheap overview: errors, failed requests and activity in the last 5 minutes |
-| `get_recent_events` | Drill-down query over captured events with type/time/limit filters         |
+| Tool                | Purpose                                                                                                                |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `get_page_health`   | Overview scoped to the most recent session: distinct errors (with folded occurrence counts), failed requests, activity |
+| `get_recent_events` | Drill-down query over captured events with type/session/time/limit filters                                             |
+| `list_sessions`     | Known page sessions (one per page load / tab), most recently active first                                              |
 
 ### Environment variables
 

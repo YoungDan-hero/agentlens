@@ -17,6 +17,7 @@ function makeError(overrides: Partial<ErrorEvent> = {}): ErrorEvent {
     message: 'boom',
     stack: null,
     frames: [],
+    occurrences: 1,
     ...overrides,
   };
 }
@@ -45,7 +46,12 @@ describe('EventStore', () => {
 
   it('evicts oldest events beyond capacity', () => {
     const store = new EventStore(2);
-    const [first, second, third] = [makeError(), makeError(), makeError()];
+    // Distinct messages so folding does not interfere with eviction.
+    const [first, second, third] = [
+      makeError({ message: 'one' }),
+      makeError({ message: 'two' }),
+      makeError({ message: 'three' }),
+    ];
     for (const event of [first, second, third]) {
       store.add(event);
     }
@@ -53,6 +59,69 @@ describe('EventStore', () => {
     expect(store.size).toBe(2);
     const ids = store.query({ limit: 10 }).map((event: AgentLensEvent) => event.id);
     expect(ids).toEqual([third.id, second.id]);
+  });
+
+  it('folds identical errors into one record with an occurrence count', () => {
+    const store = new EventStore();
+    const first = makeError({ stack: 'Error: boom\n    at render (App.tsx:1:1)' });
+    const firstSeenAt = first.timestamp;
+    const stored1 = store.add(first);
+    const stored2 = store.add(
+      makeError({
+        stack: 'Error: boom\n    at render (App.tsx:1:1)',
+        timestamp: firstSeenAt + 50,
+      }),
+    );
+
+    expect(stored1).toBe(first);
+    expect(stored2).toBe(first);
+    expect(store.size).toBe(1);
+    expect(first.occurrences).toBe(2);
+    // The folded record surfaces the latest occurrence time.
+    expect(first.timestamp).toBe(firstSeenAt + 50);
+  });
+
+  it('does not fold errors thrown from different locations', () => {
+    const store = new EventStore();
+    store.add(makeError({ stack: 'Error: boom\n    at a (A.tsx:1:1)' }));
+    store.add(makeError({ stack: 'Error: boom\n    at b (B.tsx:2:2)' }));
+
+    expect(store.size).toBe(2);
+  });
+
+  it('tracks sessions and filters queries by sessionId', () => {
+    const store = new EventStore();
+    store.add(makeError({ message: 'one', sessionId: 'tab-1' }));
+    store.add(makeError({ message: 'two', sessionId: 'tab-2' }));
+
+    expect(store.listSessions().map((s) => s.sessionId)).toContain('tab-1');
+    const tab2Events = store.query({ sessionId: 'tab-2' });
+    expect(tab2Events).toHaveLength(1);
+    expect(tab2Events[0]?.type === 'error' && tab2Events[0].message).toBe('two');
+  });
+
+  it('scopes the summary to the most recently active session by default', () => {
+    const store = new EventStore();
+    const now = Date.now();
+    store.add(makeError({ message: 'old tab', sessionId: 'tab-1', timestamp: now - 1000 }));
+    store.add(makeError({ message: 'new tab', sessionId: 'tab-2', timestamp: now }));
+
+    const summary = store.summarize(60_000);
+    expect(summary.sessionId).toBe('tab-2');
+    expect(summary.sessionCount).toBe(2);
+    expect(summary.errorCount).toBe(1);
+  });
+
+  it('counts folded occurrences separately from distinct errors', () => {
+    const store = new EventStore();
+    const stack = 'Error: storm\n    at loop (App.tsx:9:9)';
+    store.add(makeError({ message: 'storm', stack }));
+    store.add(makeError({ message: 'storm', stack }));
+    store.add(makeError({ message: 'storm', stack }));
+
+    const summary = store.summarize(60_000);
+    expect(summary.errorCount).toBe(1);
+    expect(summary.errorOccurrences).toBe(3);
   });
 
   it('filters by type and respects the limit, newest first', () => {

@@ -38,6 +38,7 @@ export function buildErrorEvent(
     stack: input.stack,
     // Source-map resolution happens in the daemon; the browser ships raw frames.
     frames: [],
+    occurrences: 1,
   };
 }
 

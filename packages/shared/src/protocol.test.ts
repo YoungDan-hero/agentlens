@@ -13,6 +13,7 @@ const validEvent: ErrorEvent = {
   message: 'boom',
   stack: null,
   frames: [],
+  occurrences: 1,
 };
 
 describe('isAgentLensEvent', () => {

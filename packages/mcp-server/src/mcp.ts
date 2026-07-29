@@ -28,10 +28,26 @@ export function createMcpServer(store: EventStore, version: string): McpServer {
     {
       title: 'Get page health',
       description:
-        'Overview of the running app: error count, failed requests and recent activity ' +
-        'within the last 5 minutes. Call this first to decide where to drill down.',
+        'Overview of the running app: distinct errors (with folded occurrence counts), ' +
+        'failed requests and recent activity within the last 5 minutes. Scoped to the ' +
+        'most recently active page session unless sessionId is given. Call this first ' +
+        'to decide where to drill down.',
+      inputSchema: {
+        sessionId: z.string().optional().describe('Scope to a specific page session'),
+      },
     },
-    () => jsonResult(store.summarize(DEFAULT_HEALTH_WINDOW_MS)),
+    (args) => jsonResult(store.summarize(DEFAULT_HEALTH_WINDOW_MS, args.sessionId)),
+  );
+
+  server.registerTool(
+    'list_sessions',
+    {
+      title: 'List page sessions',
+      description:
+        'Lists known page sessions (one per page load / tab), most recently active ' +
+        'first. Use the sessionId to scope other tools when multiple pages are open.',
+    },
+    () => jsonResult(store.listSessions()),
   );
 
   server.registerTool(
@@ -43,6 +59,7 @@ export function createMcpServer(store: EventStore, version: string): McpServer {
         'lifecycle), newest first. Filter by type and time to keep responses small.',
       inputSchema: {
         type: z.enum(['error', 'console', 'network', 'lifecycle']).optional(),
+        sessionId: z.string().optional().describe('Only events from this page session'),
         sinceMs: z
           .number()
           .int()
@@ -56,6 +73,7 @@ export function createMcpServer(store: EventStore, version: string): McpServer {
       jsonResult(
         store.query({
           ...(args.type !== undefined && { type: args.type }),
+          ...(args.sessionId !== undefined && { sessionId: args.sessionId }),
           ...(args.sinceMs !== undefined && { sinceMs: args.sinceMs }),
           ...(args.limit !== undefined && { limit: args.limit }),
         }),

@@ -62,8 +62,9 @@ export function startWsIngestServer(
         return;
       }
       for (const event of message.events) {
-        store.add(event);
-        if (resolver) {
+        const stored = store.add(event);
+        // Folded duplicates reuse the canonical record's resolved frames.
+        if (resolver && stored === event) {
           resolveStacks(event, resolver);
         }
       }

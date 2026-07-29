@@ -34,6 +34,11 @@ export interface ErrorEvent extends BaseEvent {
   /** Raw stack string as thrown in the browser (before source-map resolution). */
   stack: string | null;
   frames: StackFrame[];
+  /**
+   * How many times this identical error occurred. The browser always sends 1;
+   * the daemon folds repeats (same fingerprint) into one record and counts.
+   */
+  occurrences: number;
 }
 
 export type ConsoleLevel = 'log' | 'info' | 'warn' | 'error' | 'debug';
