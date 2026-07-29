@@ -80,8 +80,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow.
 
 - [x] M1 — error / console / network capture, source-mapped stack attribution, `get_page_health`, `get_recent_events`, E2E-verified chain
 - [x] M2 — structured layout snapshots, `data-source` attribution, `verify_fix`
-- [x] M3a — interaction timeline (cause-and-effect grouping of user actions and their effects)
-- [ ] M3b — component tree & render statistics (React / Vue)
+- [x] M3 — interaction timeline (cause-and-effect grouping of user actions and their effects)
 
 ## License
 
