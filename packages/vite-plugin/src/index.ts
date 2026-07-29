@@ -43,7 +43,12 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
       }
       return [
         `import { init } from '@agentlens/runtime';`,
-        `init({ endpoint: ${JSON.stringify(endpoint)} });`,
+        `const client = init({ endpoint: ${JSON.stringify(endpoint)} });`,
+        `if (import.meta.hot) {`,
+        `  import.meta.hot.on('vite:afterUpdate', () => {`,
+        `    client.reportHmrUpdate();`,
+        `  });`,
+        `}`,
       ].join('\n');
     },
 

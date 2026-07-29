@@ -39,6 +39,11 @@ export interface ErrorEvent extends BaseEvent {
    * the daemon folds repeats (same fingerprint) into one record and counts.
    */
   occurrences: number;
+  /**
+   * Stable identity of this error (daemon-assigned at ingest). Pass it to
+   * the `verify_fix` tool to check whether a fix made the error go away.
+   */
+  fingerprint?: string;
 }
 
 export type ConsoleLevel = 'log' | 'info' | 'warn' | 'error' | 'debug';

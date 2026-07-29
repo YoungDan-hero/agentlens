@@ -77,6 +77,9 @@ describe('EventStore', () => {
     expect(stored2).toBe(first);
     expect(store.size).toBe(1);
     expect(first.occurrences).toBe(2);
+    // The canonical record carries its fingerprint and is retrievable by it.
+    expect(first.fingerprint).toBeTruthy();
+    expect(store.getErrorByFingerprint(first.fingerprint ?? '')).toBe(first);
     // The folded record surfaces the latest occurrence time.
     expect(first.timestamp).toBe(firstSeenAt + 50);
   });

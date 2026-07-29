@@ -76,6 +76,8 @@ export class EventStore {
         existing.timestamp = event.timestamp;
         return existing;
       }
+      // Expose the identity so agents can reference this error in verify_fix.
+      event.fingerprint = fingerprint;
       this.errorsByFingerprint.set(fingerprint, event);
     }
 
@@ -114,6 +116,24 @@ export class EventStore {
       result.push(event);
     }
     return result;
+  }
+
+  /** Looks up the canonical (folded) error record by its fingerprint. */
+  getErrorByFingerprint(fingerprint: string): ErrorEvent | undefined {
+    return this.errorsByFingerprint.get(fingerprint);
+  }
+
+  /**
+   * Whether new code reached the browser after `sinceMs` — either a hot
+   * module update or a full page (re)load.
+   */
+  hasCodeUpdateSince(sinceMs: number): boolean {
+    return this.events.some(
+      (event) =>
+        event.type === 'lifecycle' &&
+        (event.phase === 'hmr-update' || event.phase === 'load') &&
+        event.timestamp > sinceMs,
+    );
   }
 
   /** Sessions ordered by most recent activity first. */

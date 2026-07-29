@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { EventStore } from './store';
+import { verifyFix } from './verify-fix';
 
 const DEFAULT_HEALTH_WINDOW_MS = 5 * 60 * 1000;
 
@@ -76,6 +77,42 @@ export function createMcpServer(store: EventStore, version: string): McpServer {
           ...(args.sessionId !== undefined && { sessionId: args.sessionId }),
           ...(args.sinceMs !== undefined && { sinceMs: args.sinceMs }),
           ...(args.limit !== undefined && { limit: args.limit }),
+        }),
+      ),
+  );
+
+  server.registerTool(
+    'verify_fix',
+    {
+      title: 'Verify a fix',
+      description:
+        'Closes the loop after editing code: waits for the new code to reach the ' +
+        'browser (HMR update or reload), then watches whether the given error ' +
+        'fingerprint recurs. Take the fingerprint from get_recent_events or ' +
+        'get_page_health. Blocks up to timeoutMs + quietWindowMs.',
+      inputSchema: {
+        fingerprint: z.string().min(1).describe('Fingerprint of the error to verify'),
+        timeoutMs: z
+          .number()
+          .int()
+          .min(500)
+          .max(60_000)
+          .optional()
+          .describe('Max wait for the code update to arrive. Defaults to 10000.'),
+        quietWindowMs: z
+          .number()
+          .int()
+          .min(500)
+          .max(30_000)
+          .optional()
+          .describe('Recurrence observation window after the update. Defaults to 3000.'),
+      },
+    },
+    async (args) =>
+      jsonResult(
+        await verifyFix(store, args.fingerprint, {
+          ...(args.timeoutMs !== undefined && { timeoutMs: args.timeoutMs }),
+          ...(args.quietWindowMs !== undefined && { quietWindowMs: args.quietWindowMs }),
         }),
       ),
   );

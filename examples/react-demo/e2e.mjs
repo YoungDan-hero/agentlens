@@ -2,6 +2,7 @@
 //   browser signals -> runtime SDK -> WebSocket -> daemon -> MCP tools.
 // Usage: pnpm --filter react-demo e2e
 import { spawn } from 'node:child_process';
+import { readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 
@@ -12,6 +13,7 @@ const DAEMON_PORT = '8632';
 const DEMO_URL = `http://localhost:${VITE_PORT}/`;
 const DAEMON_ENTRY = new URL('../../packages/mcp-server/dist/index.js', import.meta.url).pathname;
 const DEMO_DIR = new URL('.', import.meta.url).pathname;
+const APP_FILE = new URL('./src/App.tsx', import.meta.url).pathname;
 
 /** Minimal MCP client speaking newline-delimited JSON-RPC over stdio. */
 class McpClient {
@@ -91,14 +93,14 @@ function assert(condition, label) {
 }
 
 async function main() {
-  console.log('1/5 Starting AgentLens daemon...');
+  console.log('1/6 Starting AgentLens daemon...');
   const daemon = spawn('node', [DAEMON_ENTRY], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: { ...process.env, AGENTLENS_PORT: DAEMON_PORT },
   });
   daemon.stderr.on('data', (d) => process.stdout.write(`      [daemon] ${d}`));
 
-  console.log('2/5 Starting Vite dev server...');
+  console.log('2/6 Starting Vite dev server...');
   // Spawn the vite entry directly (not via `pnpm exec`) so kill() reaches
   // the actual server process instead of a wrapper.
   const vite = spawn(
@@ -112,8 +114,9 @@ async function main() {
   );
   await waitForHttp(DEMO_URL, 30_000);
 
-  console.log('3/5 Launching headless Chrome and triggering signals...');
+  console.log('3/6 Launching headless Chrome and triggering signals...');
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  const originalAppSource = await readFile(APP_FILE, 'utf8');
   try {
     const page = await browser.newPage();
     await page.goto(DEMO_URL, { waitUntil: 'networkidle' });
@@ -128,7 +131,7 @@ async function main() {
       await sleep(200);
     }
 
-    console.log('4/5 Querying the daemon over MCP...');
+    console.log('4/6 Querying the daemon over MCP...');
     const client = new McpClient(daemon);
     await client.request('initialize', {
       protocolVersion: '2025-06-18',
@@ -137,8 +140,8 @@ async function main() {
     });
     client.notify('notifications/initialized');
 
-    // The unreachable-host fetch only settles after DNS resolution fails,
-    // so poll until both failed requests have landed instead of guessing.
+    // Events flow through the runtime's micro-batching transport, so poll
+    // until both failed requests have landed instead of guessing a delay.
     let health = await client.callTool('get_page_health');
     const pollDeadline = Date.now() + 15_000;
     while (health.failedRequestCount < 2 && Date.now() < pollDeadline) {
@@ -160,7 +163,7 @@ async function main() {
     const network = await client.callTool('get_recent_events', { type: 'network' });
     const lifecycle = await client.callTool('get_recent_events', { type: 'lifecycle' });
 
-    console.log('5/5 Asserting the captured signals...');
+    console.log('5/6 Asserting the captured signals...');
     assert(
       lifecycle.some((e) => e.phase === 'load'),
       'lifecycle: page load event captured',
@@ -182,7 +185,7 @@ async function main() {
       'network: 404 response captured',
     );
     assert(
-      network.some((e) => e.requestUrl.includes('unreachable.invalid') && e.status === null),
+      network.some((e) => e.requestUrl.includes('127.0.0.1:9/unreachable') && e.status === null),
       'network: transport failure captured with null status',
     );
     assert(
@@ -198,7 +201,43 @@ async function main() {
       health.failedRequestCount >= 2,
       `health: failedRequestCount >= 2 (got ${health.failedRequestCount})`,
     );
+
+    console.log('6/6 Verifying the fix loop (verify_fix + real HMR)...');
+    const uncaught = errors.find((e) => e.subtype === 'uncaught');
+    assert(
+      typeof uncaught?.fingerprint === 'string' && uncaught.fingerprint.length > 0,
+      'verify_fix: error events expose a stable fingerprint',
+    );
+
+    // Negative path: without any code change, verification must not pass.
+    const noUpdate = await client.callTool('verify_fix', {
+      fingerprint: uncaught.fingerprint,
+      timeoutMs: 500,
+      quietWindowMs: 500,
+    });
+    assert(
+      noUpdate.verified === false && noUpdate.codeUpdateApplied === false,
+      'verify_fix: reports "not verified" when no code update arrives',
+    );
+
+    // Positive path: touch App.tsx to trigger a real HMR update while
+    // verify_fix is waiting; the error does not recur, so it verifies.
+    const pendingVerify = client.callTool('verify_fix', {
+      fingerprint: uncaught.fingerprint,
+      timeoutMs: 6_000,
+      quietWindowMs: 1_500,
+    });
+    await sleep(1_000);
+    await writeFile(APP_FILE, originalAppSource + '\n// e2e-hmr-touch\n', 'utf8');
+    const verify = await pendingVerify;
+    console.log(`      verify_fix = ${JSON.stringify(verify)}`);
+    assert(
+      verify.codeUpdateApplied === true,
+      'verify_fix: HMR update reported by the runtime was observed',
+    );
+    assert(verify.verified === true, 'verify_fix: fix verified after HMR with no recurrence');
   } finally {
+    await writeFile(APP_FILE, originalAppSource, 'utf8');
     await browser.close();
     vite.kill('SIGTERM');
     daemon.kill('SIGTERM');
@@ -215,9 +254,9 @@ async function main() {
 
 // Watchdog: never leave the pipeline hanging on an unexpected stall.
 const watchdog = setTimeout(() => {
-  console.error('E2E watchdog: timed out after 90s');
+  console.error('E2E watchdog: timed out after 120s');
   process.exit(1);
-}, 90_000);
+}, 120_000);
 watchdog.unref();
 
 main().catch((error) => {

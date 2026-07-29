@@ -34,7 +34,9 @@ const logStyle: CSSProperties = {
 
 async function fetchUnreachableHost(): Promise<void> {
   try {
-    await fetch('http://unreachable.invalid/resource');
+    // Port 9 (discard) is on every browser's blocked-port list, so the fetch
+    // fails at the transport level instantly — no DNS lookup, no timeout.
+    await fetch('http://127.0.0.1:9/unreachable');
   } catch {
     // Expected: transport-level failure is what we want AgentLens to capture.
   }
@@ -73,7 +75,7 @@ export function App(): JSX.Element {
   };
 
   const fetchUnreachable = (): void => {
-    record('emitted: GET http://unreachable.invalid (transport failure)');
+    record('emitted: GET http://127.0.0.1:9/unreachable (transport failure)');
     void fetchUnreachableHost();
   };
 

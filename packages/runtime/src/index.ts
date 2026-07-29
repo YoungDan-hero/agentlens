@@ -13,6 +13,12 @@ export interface InitOptions {
 }
 
 export interface AgentLensClient {
+  /**
+   * Reports that a hot-module update was applied. Wired up by the Vite
+   * plugin's virtual module, where `import.meta.hot` is available; the
+   * daemon's `verify_fix` tool relies on this signal.
+   */
+  reportHmrUpdate: () => void;
   /** Tears down all collectors and closes the transport. */
   dispose: () => void;
 }
@@ -49,6 +55,9 @@ export function init(options: InitOptions = {}): AgentLensClient {
   transport.send(buildLifecycleEvent(context, 'load'));
 
   const client: AgentLensClient = {
+    reportHmrUpdate: () => {
+      transport.send(buildLifecycleEvent(context, 'hmr-update'));
+    },
     dispose: () => {
       for (const teardown of teardowns) {
         teardown();
