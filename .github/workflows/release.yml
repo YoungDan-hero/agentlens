@@ -15,7 +15,9 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    # Requires the NPM_TOKEN repository secret to be configured.
+    # Publishes via npm Trusted Publishing (OIDC) — no NPM_TOKEN secret.
+    # Each package must have this repo + workflow registered as its
+    # Trusted Publisher on npmjs.com (Settings -> Trusted Publisher).
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,6 +33,10 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # Trusted publishing requires npm >= 11.5.1; Node 22 bundles npm 10.
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@latest
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -43,4 +49,3 @@ jobs:
           title: 'chore: 发布版本'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
