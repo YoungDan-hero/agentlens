@@ -1,4 +1,5 @@
 import type { InteractionTarget } from '@agentlensjs/shared';
+import { SOURCE_ATTRIBUTE } from '@agentlensjs/shared';
 
 import type { EventContext } from '../events';
 import { buildInteractionEvent } from '../events';
@@ -21,8 +22,7 @@ export function describeTarget(element: Element): InteractionTarget {
           : text,
     // Clicks often land on an untagged child (e.g. a span inside a button);
     // the nearest tagged ancestor is the meaningful attribution.
-    source:
-      element.closest('[data-agentlens-source]')?.getAttribute('data-agentlens-source') ?? null,
+    source: element.closest(`[${SOURCE_ATTRIBUTE}]`)?.getAttribute(SOURCE_ATTRIBUTE) ?? null,
   };
 }
 

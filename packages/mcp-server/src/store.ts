@@ -74,6 +74,11 @@ export class EventStore {
       if (existing) {
         existing.occurrences += event.occurrences;
         existing.timestamp = event.timestamp;
+        // The canonical record follows its latest occurrence, so a reload
+        // (new session) cannot hide a still-recurring error from
+        // session-scoped queries and health summaries.
+        existing.sessionId = event.sessionId;
+        existing.url = event.url;
         return existing;
       }
       // Expose the identity so agents can reference this error in verify_fix.

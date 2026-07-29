@@ -1,8 +1,6 @@
+import { SOURCE_ATTRIBUTE } from '@agentlensjs/shared';
 import { parse } from '@babel/parser';
 import MagicString from 'magic-string';
-
-/** DOM attribute carrying the original source location of an element. */
-export const SOURCE_ATTRIBUTE = 'data-agentlens-source';
 
 export interface InjectResult {
   code: string;

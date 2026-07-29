@@ -4,6 +4,7 @@ import type { SnapshotResponse } from '@agentlensjs/shared';
 import { installConsoleCollector } from './collectors/console';
 import { installErrorCollector } from './collectors/errors';
 import { installInteractionCollector } from './collectors/interactions';
+import { installNavigationCollector } from './collectors/navigation';
 import { installNetworkCollector } from './collectors/network';
 import type { EventContext } from './events';
 import { buildLifecycleEvent } from './events';
@@ -45,7 +46,10 @@ export function init(options: InitOptions = {}): AgentLensClient {
   const endpoint = options.endpoint ?? `ws://localhost:${String(DEFAULT_WS_PORT)}${WS_PATH}`;
   const context: EventContext = {
     sessionId: crypto.randomUUID(),
-    url: window.location.href,
+    // Read lazily so SPA route changes are reflected in every event's url.
+    get url() {
+      return window.location.href;
+    },
   };
 
   const transport: Transport = new Transport({
@@ -72,7 +76,19 @@ export function init(options: InitOptions = {}): AgentLensClient {
     installConsoleCollector(transport, context),
     installNetworkCollector(transport, context),
     installInteractionCollector(transport, context),
+    installNavigationCollector(transport, context),
   ];
+
+  // Flush synchronously on pagehide: the batch window would otherwise drop
+  // the last moments of a session when the tab closes or reloads.
+  const onPageHide = (): void => {
+    transport.send(buildLifecycleEvent(context, 'unload'));
+    transport.flush();
+  };
+  window.addEventListener('pagehide', onPageHide);
+  teardowns.push(() => {
+    window.removeEventListener('pagehide', onPageHide);
+  });
 
   transport.send(buildLifecycleEvent(context, 'load'));
 

@@ -11,6 +11,7 @@ import type {
   SnapshotResponse,
 } from '@agentlensjs/shared';
 import { randomUUID } from 'node:crypto';
+import type { RawData } from 'ws';
 import { WebSocketServer, WebSocket } from 'ws';
 
 import type { StackResolver } from './stack-resolver';
@@ -61,7 +62,9 @@ export function startWsIngestServer(
   port: number,
   resolver?: StackResolver,
 ): WsIngestServer {
-  const wss = new WebSocketServer({ port, path: WS_PATH });
+  // Loopback only: events arrive unauthenticated, so the ingest endpoint
+  // must never be reachable from other machines on the network.
+  const wss = new WebSocketServer({ host: '127.0.0.1', port, path: WS_PATH });
   const connections = new Map<WebSocket, ConnectionInfo>();
   const pendingSnapshots = new Map<
     string,
@@ -90,8 +93,7 @@ export function startWsIngestServer(
     socket.on('message', (raw) => {
       let message: unknown;
       try {
-        // eslint-disable-next-line @typescript-eslint/no-base-to-string
-        message = JSON.parse(raw.toString());
+        message = JSON.parse(rawDataToString(raw));
       } catch {
         return;
       }
@@ -182,6 +184,16 @@ export function startWsIngestServer(
         });
       }),
   };
+}
+
+function rawDataToString(raw: RawData): string {
+  if (Buffer.isBuffer(raw)) {
+    return raw.toString('utf8');
+  }
+  if (Array.isArray(raw)) {
+    return Buffer.concat(raw).toString('utf8');
+  }
+  return Buffer.from(raw).toString('utf8');
 }
 
 function isProtocolMessage(value: unknown): value is ProtocolMessage {

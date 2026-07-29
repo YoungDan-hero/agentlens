@@ -84,6 +84,20 @@ describe('EventStore', () => {
     expect(first.timestamp).toBe(firstSeenAt + 50);
   });
 
+  it('reassigns a folded error to the session of its latest occurrence', () => {
+    const store = new EventStore();
+    const stack = 'Error: boom\n    at render (App.tsx:1:1)';
+    const now = Date.now();
+    store.add(makeError({ stack, sessionId: 'before-reload', timestamp: now - 1000 }));
+    store.add(makeError({ stack, sessionId: 'after-reload', timestamp: now }));
+
+    // A reload must not hide a still-recurring error from the new session.
+    const summary = store.summarize(60_000);
+    expect(summary.sessionId).toBe('after-reload');
+    expect(summary.errorCount).toBe(1);
+    expect(summary.errorOccurrences).toBe(2);
+  });
+
   it('does not fold errors thrown from different locations', () => {
     const store = new EventStore();
     store.add(makeError({ stack: 'Error: boom\n    at a (A.tsx:1:1)' }));

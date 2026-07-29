@@ -1,4 +1,5 @@
 import type { LayoutNode } from '@agentlensjs/shared';
+import { SOURCE_ATTRIBUTE } from '@agentlensjs/shared';
 
 /** Elements that never contribute to visible layout. */
 const SKIPPED_TAGS = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE']);
@@ -78,7 +79,7 @@ export function captureLayoutSnapshot(
 
     return {
       tag: element.tagName.toLowerCase(),
-      source: element.getAttribute('data-agentlens-source'),
+      source: element.getAttribute(SOURCE_ATTRIBUTE),
       rect: {
         x: Math.round(rect.x),
         y: Math.round(rect.y),

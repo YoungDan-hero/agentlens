@@ -59,6 +59,8 @@ function isLoopbackUrl(url: string): boolean {
 export interface StackResolverOptions {
   /** Timeout for each module/map download. @default 3000 */
   fetchTimeoutMs?: number;
+  /** Max cached source maps before oldest entries are evicted. @default 200 */
+  maxCacheEntries?: number;
 }
 
 /**
@@ -70,9 +72,11 @@ export interface StackResolverOptions {
 export class StackResolver {
   private readonly cache = new Map<string, Promise<TraceMap | null>>();
   private readonly fetchTimeoutMs: number;
+  private readonly maxCacheEntries: number;
 
   constructor(options: StackResolverOptions = {}) {
     this.fetchTimeoutMs = options.fetchTimeoutMs ?? 3000;
+    this.maxCacheEntries = options.maxCacheEntries ?? 200;
   }
 
   async resolve(stack: string | null): Promise<StackFrame[]> {
@@ -114,6 +118,15 @@ export class StackResolver {
   private getMap(url: string): Promise<TraceMap | null> {
     let cached = this.cache.get(url);
     if (!cached) {
+      // HMR mints a new `?t=` URL per update, so the cache must be bounded
+      // for a long-running daemon. FIFO eviction: oldest URL is least
+      // likely to appear in fresh stacks.
+      if (this.cache.size >= this.maxCacheEntries) {
+        const oldest = this.cache.keys().next().value;
+        if (oldest !== undefined) {
+          this.cache.delete(oldest);
+        }
+      }
       cached = this.loadMap(url).catch(() => null);
       this.cache.set(url, cached);
     }

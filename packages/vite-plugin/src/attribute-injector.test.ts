@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { injectSourceAttributes, SOURCE_ATTRIBUTE } from './attribute-injector';
+import { SOURCE_ATTRIBUTE } from '@agentlensjs/shared';
+
+import { injectSourceAttributes } from './attribute-injector';
 
 describe('injectSourceAttributes', () => {
   it('tags host elements with file and line', () => {

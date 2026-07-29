@@ -175,6 +175,18 @@ describe('Transport micro-batching', () => {
     transport.close();
   });
 
+  it('flushes pending events on close instead of dropping them', () => {
+    const transport = new Transport({ endpoint: 'ws://localhost:8631/agentlens' });
+    const socket = FakeWebSocket.instances[0];
+    socket?.simulateOpen();
+
+    transport.send(makeEvent('last-words'));
+    transport.close();
+
+    expect(socket?.sent).toHaveLength(1);
+    expect(socket?.lastMessages()[0]?.events).toHaveLength(1);
+  });
+
   it('sends nothing after close', () => {
     const transport = new Transport({ endpoint: 'ws://localhost:8631/agentlens' });
     const socket = FakeWebSocket.instances[0];

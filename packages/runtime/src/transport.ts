@@ -81,6 +81,9 @@ export class Transport implements EventSink {
   }
 
   close(): void {
+    // Ship whatever is still sitting in the batch window before tearing
+    // down, so dispose/unload does not silently drop the last events.
+    this.flush();
     this.closed = true;
     if (this.flushTimer !== null) {
       clearTimeout(this.flushTimer);
@@ -100,7 +103,8 @@ export class Transport implements EventSink {
     }, this.batchWindowMs);
   }
 
-  private flush(): void {
+  /** Sends all queued events immediately if the socket is open. */
+  flush(): void {
     if (this.flushTimer !== null) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;

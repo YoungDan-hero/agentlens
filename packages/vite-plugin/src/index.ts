@@ -3,7 +3,8 @@ import type { Plugin } from 'vite';
 
 import { injectSourceAttributes } from './attribute-injector';
 
-export { SOURCE_ATTRIBUTE, injectSourceAttributes } from './attribute-injector';
+export { SOURCE_ATTRIBUTE } from '@agentlensjs/shared';
+export { injectSourceAttributes } from './attribute-injector';
 
 export interface AgentLensPluginOptions {
   /**
