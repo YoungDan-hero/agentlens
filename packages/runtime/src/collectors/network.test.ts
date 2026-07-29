@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentLensEvent, NetworkEvent } from '@agentlens/shared';
+import type { AgentLensEvent, NetworkEvent } from '@agentlensjs/shared';
 import type { EventContext } from '../events';
 import type { EventSink } from '../transport';
 import { installNetworkCollector } from './network';

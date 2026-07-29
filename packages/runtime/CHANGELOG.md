@@ -1,4 +1,4 @@
-# @agentlens/runtime
+# @agentlensjs/runtime
 
 ## 0.1.0
 
@@ -9,4 +9,4 @@
 ### Patch Changes
 
 - Updated dependencies [5c5b292]
-  - @agentlens/shared@0.1.0
+  - @agentlensjs/shared@0.1.0

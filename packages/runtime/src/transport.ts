@@ -1,5 +1,5 @@
-import type { AgentLensEvent, ProtocolMessage } from '@agentlens/shared';
-import { PROTOCOL_VERSION } from '@agentlens/shared';
+import type { AgentLensEvent, ProtocolMessage } from '@agentlensjs/shared';
+import { PROTOCOL_VERSION } from '@agentlensjs/shared';
 
 /** Anything that can receive events; lets collectors be tested in isolation. */
 export interface EventSink {

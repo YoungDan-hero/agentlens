@@ -1,4 +1,4 @@
-import { DEFAULT_WS_PORT, WS_PATH } from '@agentlens/shared';
+import { DEFAULT_WS_PORT, WS_PATH } from '@agentlensjs/shared';
 
 import { installConsoleCollector } from './collectors/console';
 import { installErrorCollector } from './collectors/errors';
@@ -31,7 +31,7 @@ declare global {
 
 /**
  * Boots the AgentLens runtime. Intended to be called exactly once per page,
- * typically via the virtual module injected by `@agentlens/vite-plugin`.
+ * typically via the virtual module injected by `@agentlensjs/vite-plugin`.
  */
 export function init(options: InitOptions = {}): AgentLensClient {
   // Guard against double initialization across HMR boundaries.

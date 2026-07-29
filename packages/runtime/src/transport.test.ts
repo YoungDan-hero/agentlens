@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ProtocolMessage } from '@agentlens/shared';
+import type { ProtocolMessage } from '@agentlensjs/shared';
 import type { EventContext } from './events';
 import { buildConsoleEvent } from './events';
 import { Transport } from './transport';

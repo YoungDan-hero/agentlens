@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { DEFAULT_WS_PORT } from '@agentlens/shared';
+import { DEFAULT_WS_PORT } from '@agentlensjs/shared';
 
 import { createMcpServer } from './mcp';
 import { StackResolver } from './stack-resolver';

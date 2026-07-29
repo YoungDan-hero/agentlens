@@ -1,4 +1,4 @@
-import type { StackFrame } from '@agentlens/shared';
+import type { StackFrame } from '@agentlensjs/shared';
 import { originalPositionFor, TraceMap } from '@jridgewell/trace-mapping';
 
 /** A frame as it appears in a raw V8 stack string, before source mapping. */

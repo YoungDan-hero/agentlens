@@ -1,6 +1,6 @@
 # AgentLens React Demo
 
-A minimal React app wired with `@agentlens/vite-plugin`. Five buttons emit the runtime signals AgentLens captures: an uncaught error, an unhandled promise rejection, a `console.error`, a 404 response, and a transport-level network failure.
+A minimal React app wired with `@agentlensjs/vite-plugin`. Five buttons emit the runtime signals AgentLens captures: an uncaught error, an unhandled promise rejection, a `console.error`, a 404 response, and a transport-level network failure.
 
 ## Run interactively
 

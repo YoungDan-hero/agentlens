@@ -1,5 +1,5 @@
 {
-  "name": "@agentlens/shared",
+  "name": "@agentlensjs/shared",
   "version": "0.1.0",
   "description": "Shared event protocol and type definitions for AgentLens packages.",
   "license": "MIT",

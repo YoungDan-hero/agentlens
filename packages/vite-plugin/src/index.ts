@@ -1,4 +1,4 @@
-import { DEFAULT_WS_PORT, WS_PATH } from '@agentlens/shared';
+import { DEFAULT_WS_PORT, WS_PATH } from '@agentlensjs/shared';
 import type { Plugin } from 'vite';
 
 export interface AgentLensPluginOptions {
@@ -42,7 +42,7 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
         return undefined;
       }
       return [
-        `import { init } from '@agentlens/runtime';`,
+        `import { init } from '@agentlensjs/runtime';`,
         `const client = init({ endpoint: ${JSON.stringify(endpoint)} });`,
         `if (import.meta.hot) {`,
         `  import.meta.hot.on('vite:afterUpdate', () => {`,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { AgentLensEvent, ErrorEvent, NetworkEvent } from '@agentlens/shared';
+import type { AgentLensEvent, ErrorEvent, NetworkEvent } from '@agentlensjs/shared';
 import { EventStore } from './store';
 
 let counter = 0;

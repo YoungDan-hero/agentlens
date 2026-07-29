@@ -22,7 +22,7 @@ describe('agentlens vite plugin', () => {
     expect(resolved).toBe(`\0${VIRTUAL_MODULE_ID}`);
 
     const code = callHook(plugin.load, resolved) as string;
-    expect(code).toContain(`@agentlens/runtime`);
+    expect(code).toContain(`@agentlensjs/runtime`);
     expect(code).toContain('ws://localhost:9999/agentlens');
     // HMR updates must be reported so the daemon's verify_fix can work.
     expect(code).toContain('vite:afterUpdate');

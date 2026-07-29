@@ -4,7 +4,7 @@ import type {
   ErrorEvent,
   LifecycleEvent,
   NetworkEvent,
-} from '@agentlens/shared';
+} from '@agentlensjs/shared';
 
 export interface EventContext {
   sessionId: string;

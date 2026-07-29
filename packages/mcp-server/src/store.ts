@@ -1,4 +1,4 @@
-import type { AgentLensEvent, AgentLensEventType, ErrorEvent } from '@agentlens/shared';
+import type { AgentLensEvent, AgentLensEventType, ErrorEvent } from '@agentlensjs/shared';
 
 export interface EventQuery {
   type?: AgentLensEventType;

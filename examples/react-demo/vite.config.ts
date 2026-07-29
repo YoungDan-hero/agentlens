@@ -1,4 +1,4 @@
-import { agentlens } from '@agentlens/vite-plugin';
+import { agentlens } from '@agentlensjs/vite-plugin';
 import react from '@vitejs/plugin-react';
 import type { Plugin } from 'vite';
 import { defineConfig } from 'vite';

@@ -1,5 +1,5 @@
 {
-  "name": "@agentlens/vite-plugin",
+  "name": "@agentlensjs/vite-plugin",
   "version": "0.1.0",
   "description": "Vite plugin that injects the AgentLens runtime SDK into your app during development.",
   "license": "MIT",
@@ -27,7 +27,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@agentlens/shared": "workspace:*"
+    "@agentlensjs/shared": "workspace:*"
   },
   "peerDependencies": {
     "vite": ">=5.0.0"

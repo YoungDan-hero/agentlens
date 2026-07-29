@@ -1,5 +1,5 @@
-import { isAgentLensEvent, PROTOCOL_VERSION, WS_PATH } from '@agentlens/shared';
-import type { AgentLensEvent, ProtocolMessage } from '@agentlens/shared';
+import { isAgentLensEvent, PROTOCOL_VERSION, WS_PATH } from '@agentlensjs/shared';
+import type { AgentLensEvent, ProtocolMessage } from '@agentlensjs/shared';
 import { WebSocketServer } from 'ws';
 
 import type { StackResolver } from './stack-resolver';
@@ -27,7 +27,7 @@ function resolveStacks(event: AgentLensEvent, resolver: StackResolver): void {
 }
 
 /**
- * Accepts WebSocket connections from `@agentlens/runtime` instances and
+ * Accepts WebSocket connections from `@agentlensjs/runtime` instances and
  * ingests their event batches into the store.
  */
 export function startWsIngestServer(

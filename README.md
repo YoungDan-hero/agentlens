@@ -20,12 +20,12 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 
 ## Packages
 
-| Package                                            | Description                                        |
-| -------------------------------------------------- | -------------------------------------------------- |
-| [`@agentlens/vite-plugin`](./packages/vite-plugin) | Injects the runtime SDK into your app in dev mode  |
-| [`@agentlens/runtime`](./packages/runtime)         | In-browser collector: errors, console, network     |
-| [`@agentlens/mcp-server`](./packages/mcp-server)   | Daemon that stores events and serves them over MCP |
-| [`@agentlens/shared`](./packages/shared)           | Wire protocol and shared type definitions          |
+| Package                                              | Description                                        |
+| ---------------------------------------------------- | -------------------------------------------------- |
+| [`@agentlensjs/vite-plugin`](./packages/vite-plugin) | Injects the runtime SDK into your app in dev mode  |
+| [`@agentlensjs/runtime`](./packages/runtime)         | In-browser collector: errors, console, network     |
+| [`@agentlensjs/mcp-server`](./packages/mcp-server)   | Daemon that stores events and serves them over MCP |
+| [`@agentlensjs/shared`](./packages/shared)           | Wire protocol and shared type definitions          |
 
 ## Quick start
 
@@ -34,7 +34,7 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 ```ts
 // vite.config.ts
 import { defineConfig } from 'vite';
-import { agentlens } from '@agentlens/vite-plugin';
+import { agentlens } from '@agentlensjs/vite-plugin';
 
 export default defineConfig({
   plugins: [agentlens()],
@@ -48,7 +48,7 @@ export default defineConfig({
   "mcpServers": {
     "agentlens": {
       "command": "npx",
-      "args": ["-y", "@agentlens/mcp-server"]
+      "args": ["-y", "@agentlensjs/mcp-server"]
     }
   }
 }

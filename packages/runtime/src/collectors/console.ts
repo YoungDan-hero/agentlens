@@ -1,4 +1,4 @@
-import type { ConsoleLevel } from '@agentlens/shared';
+import type { ConsoleLevel } from '@agentlensjs/shared';
 
 import type { EventContext } from '../events';
 import { buildConsoleEvent } from '../events';

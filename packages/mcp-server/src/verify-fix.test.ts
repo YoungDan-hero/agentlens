@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ErrorEvent, LifecycleEvent } from '@agentlens/shared';
+import type { ErrorEvent, LifecycleEvent } from '@agentlensjs/shared';
 import { EventStore } from './store';
 import { verifyFix, type VerifyFixResult } from './verify-fix';
 

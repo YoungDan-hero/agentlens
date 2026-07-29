@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentLensEvent } from '@agentlens/shared';
+import type { AgentLensEvent } from '@agentlensjs/shared';
 import type { EventContext } from '../events';
 import type { EventSink } from '../transport';
 import { installConsoleCollector } from './console';

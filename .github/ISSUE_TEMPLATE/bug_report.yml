@@ -16,7 +16,7 @@ body:
       label: Reproduction
       description: Minimal steps or a repository link that reproduces the issue.
       placeholder: |
-        1. Install `@agentlens/vite-plugin` ...
+        1. Install `@agentlensjs/vite-plugin` ...
         2. Run `vite dev` ...
         3. See error ...
     validations:
@@ -31,7 +31,7 @@ body:
     id: package
     attributes:
       label: Affected package(s) and version(s)
-      placeholder: '@agentlens/mcp-server@0.1.0'
+      placeholder: '@agentlensjs/mcp-server@0.1.0'
     validations:
       required: true
   - type: textarea

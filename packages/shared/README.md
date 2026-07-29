@@ -1,4 +1,4 @@
-# @agentlens/shared
+# @agentlensjs/shared
 
 Shared event protocol and type definitions used by all AgentLens packages.
 

@@ -1,6 +1,6 @@
-# @agentlens/mcp-server
+# @agentlensjs/mcp-server
 
-The AgentLens daemon. It ingests runtime signals from `@agentlens/runtime` over WebSocket, keeps a bounded in-memory event store, and exposes them to AI coding agents via the [Model Context Protocol](https://modelcontextprotocol.io).
+The AgentLens daemon. It ingests runtime signals from `@agentlensjs/runtime` over WebSocket, keeps a bounded in-memory event store, and exposes them to AI coding agents via the [Model Context Protocol](https://modelcontextprotocol.io).
 
 ## Usage
 
@@ -11,7 +11,7 @@ Register it in your MCP client (e.g. Cursor's `mcp.json`):
   "mcpServers": {
     "agentlens": {
       "command": "npx",
-      "args": ["-y", "@agentlens/mcp-server"]
+      "args": ["-y", "@agentlensjs/mcp-server"]
     }
   }
 }
