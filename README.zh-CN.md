@@ -27,7 +27,7 @@ AI 编程助手能写前端代码，却看不见浏览器里发生了什么。�
 
 - **错误** —— 未捕获异常与未处理的 Promise rejection，堆栈经 source map 还原到原始源码文件与行号
 - **控制台** —— 五个级别（`log` / `info` / `warn` / `error` / `debug`）全量捕获，参数安全序列化并限长
-- **网络** —— 每个 `fetch` 请求的方法、状态码、耗时，以及发起该请求的源码位置
+- **网络** —— 每个 `fetch` 与 `XMLHttpRequest`（含 axios）请求的方法、状态码、耗时，以及发起该请求的源码位置
 - **用户交互** —— 点击、防抖后的输入、表单提交，每个交互都归因到渲染该元素的源码行
 - **生命周期** —— 页面加载、SPA 路由跳转、HMR 热更新、页面卸载
 
@@ -161,7 +161,7 @@ pnpm typecheck  # 类型检查
 ## 已知限制
 
 - **仅支持 Vite** —— runtime 通过 `@agentlensjs/vite-plugin` 注入，暂不支持其他构建工具。
-- **仅捕获 `fetch`** —— 通过 `XMLHttpRequest`（如 axios 默认适配器）或 `sendBeacon` 发出的请求不会被记录。
+- **不捕获 `sendBeacon` / WebSocket** —— 网络采集覆盖 `fetch` 与 `XMLHttpRequest`，beacon 与 socket 流量不会被记录。
 - **内存存储** —— daemon 将事件保存在有界内存缓冲区中，重启即清空。作为开发期工具，这是有意的设计。
 - **不遍历 iframe / shadow DOM** —— 布局快照仅覆盖顶层文档。
 

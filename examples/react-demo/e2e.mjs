@@ -134,7 +134,14 @@ async function main() {
       `attribution: DOM element traced to source (got ${String(sourceAttr)})`,
     );
 
-    for (const id of ['btn-error', 'btn-rejection', 'btn-console', 'btn-404', 'btn-network-fail']) {
+    for (const id of [
+      'btn-error',
+      'btn-rejection',
+      'btn-console',
+      'btn-404',
+      'btn-network-fail',
+      'btn-xhr',
+    ]) {
       await page.click(`#${id}`);
       await sleep(200);
     }
@@ -195,6 +202,10 @@ async function main() {
     assert(
       network.some((e) => e.requestUrl.includes('127.0.0.1:9/unreachable') && e.status === null),
       'network: transport failure captured with null status',
+    );
+    assert(
+      network.some((e) => e.requestUrl.includes('/api/xhr-missing') && e.status === 404),
+      'network: XMLHttpRequest (axios-style) request captured',
     );
     assert(
       errors.some((e) => e.frames.some((f) => f.fileName?.includes('App.tsx') && f.line > 0)),

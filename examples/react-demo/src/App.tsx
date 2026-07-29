@@ -79,6 +79,15 @@ export function App(): JSX.Element {
     void fetchUnreachableHost();
   };
 
+  const xhrMissingEndpoint = (): void => {
+    record('emitted: XHR GET /api/xhr-missing (404)');
+    // Deliberately raw XHR: axios' default browser adapter goes through
+    // XMLHttpRequest, and AgentLens must capture that path too.
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/xhr-missing');
+    xhr.send();
+  };
+
   return (
     <main style={pageStyle}>
       <h1>AgentLens Demo</h1>
@@ -103,6 +112,9 @@ export function App(): JSX.Element {
       </button>
       <button id="btn-network-fail" style={buttonStyle} onClick={fetchUnreachable}>
         5. Fetch an unreachable host
+      </button>
+      <button id="btn-xhr" style={buttonStyle} onClick={xhrMissingEndpoint}>
+        6. XHR a 404 endpoint (axios-style)
       </button>
 
       <section id="signal-log" style={logStyle} aria-live="polite">

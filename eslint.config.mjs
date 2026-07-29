@@ -29,6 +29,14 @@ export default tseslint.config(
     },
   },
   {
+    files: ['**/*.test.ts'],
+    rules: {
+      // Known false positive in tests: comparing method identity on fakes
+      // (e.g. `expect(proto.open).toBe(original)`) never invokes `this`.
+      '@typescript-eslint/unbound-method': 'off',
+    },
+  },
+  {
     files: ['**/*.{js,mjs,cjs}'],
     ...tseslint.configs.disableTypeChecked,
     languageOptions: {

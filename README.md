@@ -27,7 +27,7 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 
 - **Errors** — uncaught exceptions and unhandled promise rejections, with stack traces resolved back to your original source files via source maps
 - **Console** — all five levels (`log` / `info` / `warn` / `error` / `debug`) with bounded, safely serialized arguments
-- **Network** — every `fetch` with method, status, duration, and the source location that initiated the request
+- **Network** — every `fetch` and `XMLHttpRequest` (axios included) with method, status, duration, and the source location that initiated the request
 - **User interactions** — clicks, debounced inputs and form submits, each attributed to the source line that rendered the element
 - **Lifecycle** — page loads, SPA route changes, HMR updates and unloads
 
@@ -153,7 +153,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow.
 ## Known limitations
 
 - **Vite only** — the runtime is injected via `@agentlensjs/vite-plugin`; other bundlers are not supported yet.
-- **`fetch` only** — network capture wraps `fetch`. Requests made through `XMLHttpRequest` (e.g. axios' default adapter) or `sendBeacon` are not recorded.
+- **No `sendBeacon` / WebSocket capture** — network capture covers `fetch` and `XMLHttpRequest`; beacon and socket traffic is not recorded.
 - **In-memory store** — the daemon keeps events in a bounded in-memory buffer; restarting the daemon clears history. This is by design for a dev-time tool.
 - **No iframe / shadow DOM traversal** — layout snapshots cover the top-level document only.
 
