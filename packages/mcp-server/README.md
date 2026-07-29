@@ -19,12 +19,13 @@ Register it in your MCP client (e.g. Cursor's `mcp.json`):
 
 ### Tools
 
-| Tool                | Purpose                                                                                                                |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `get_page_health`   | Overview scoped to the most recent session: distinct errors (with folded occurrence counts), failed requests, activity |
-| `get_recent_events` | Drill-down query over captured events with type/session/time/limit filters                                             |
-| `list_sessions`     | Known page sessions (one per page load / tab), most recently active first                                              |
-| `verify_fix`        | Closes the loop after a code edit: waits for HMR/reload, then reports whether the error fingerprint recurred           |
+| Tool                  | Purpose                                                                                                                |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `get_page_health`     | Overview scoped to the most recent session: distinct errors (with folded occurrence counts), failed requests, activity |
+| `get_recent_events`   | Drill-down query over captured events with type/session/time/limit filters                                             |
+| `list_sessions`       | Known page sessions (one per page load / tab), most recently active first                                              |
+| `verify_fix`          | Closes the loop after a code edit: waits for HMR/reload, then reports whether the error fingerprint recurred           |
+| `get_layout_snapshot` | Live structured layout tree of the page: boxes, visibility, overflow, text and per-element source attribution          |
 
 ### Fix verification workflow
 

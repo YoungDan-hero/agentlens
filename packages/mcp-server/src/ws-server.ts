@@ -1,12 +1,37 @@
-import { isAgentLensEvent, PROTOCOL_VERSION, WS_PATH } from '@agentlensjs/shared';
-import type { AgentLensEvent, ProtocolMessage } from '@agentlensjs/shared';
-import { WebSocketServer } from 'ws';
+import {
+  isAgentLensEvent,
+  isSnapshotResponse,
+  PROTOCOL_VERSION,
+  WS_PATH,
+} from '@agentlensjs/shared';
+import type {
+  AgentLensEvent,
+  ProtocolMessage,
+  SnapshotRequest,
+  SnapshotResponse,
+} from '@agentlensjs/shared';
+import { randomUUID } from 'node:crypto';
+import { WebSocketServer, WebSocket } from 'ws';
 
 import type { StackResolver } from './stack-resolver';
 import type { EventStore } from './store';
 
+const SNAPSHOT_TIMEOUT_MS = 5000;
+
 export interface WsIngestServer {
+  /**
+   * Asks a connected browser session for a structured layout snapshot.
+   * Targets the given session when provided, otherwise the most recently
+   * active connection. Rejects when no browser is connected or the browser
+   * does not answer within the timeout.
+   */
+  requestSnapshot: (sessionId?: string, timeoutMs?: number) => Promise<SnapshotResponse>;
   close: () => Promise<void>;
+}
+
+interface ConnectionInfo {
+  sessionId: string | null;
+  lastActivityAt: number;
 }
 
 /**
@@ -27,8 +52,9 @@ function resolveStacks(event: AgentLensEvent, resolver: StackResolver): void {
 }
 
 /**
- * Accepts WebSocket connections from `@agentlensjs/runtime` instances and
- * ingests their event batches into the store.
+ * Accepts WebSocket connections from `@agentlensjs/runtime` instances,
+ * ingests their event batches into the store, and serves as the daemon-side
+ * endpoint for request/response exchanges such as layout snapshots.
  */
 export function startWsIngestServer(
   store: EventStore,
@@ -36,6 +62,11 @@ export function startWsIngestServer(
   resolver?: StackResolver,
 ): WsIngestServer {
   const wss = new WebSocketServer({ port, path: WS_PATH });
+  const connections = new Map<WebSocket, ConnectionInfo>();
+  const pendingSnapshots = new Map<
+    string,
+    { resolve: (response: SnapshotResponse) => void; timer: NodeJS.Timeout }
+  >();
 
   wss.on('error', (error: NodeJS.ErrnoException) => {
     if (error.code === 'EADDRINUSE') {
@@ -50,6 +81,12 @@ export function startWsIngestServer(
   });
 
   wss.on('connection', (socket) => {
+    connections.set(socket, { sessionId: null, lastActivityAt: Date.now() });
+
+    socket.on('close', () => {
+      connections.delete(socket);
+    });
+
     socket.on('message', (raw) => {
       let message: unknown;
       try {
@@ -58,8 +95,24 @@ export function startWsIngestServer(
       } catch {
         return;
       }
+
+      if (isSnapshotResponse(message)) {
+        const pending = pendingSnapshots.get(message.requestId);
+        if (pending) {
+          pendingSnapshots.delete(message.requestId);
+          clearTimeout(pending.timer);
+          pending.resolve(message);
+        }
+        return;
+      }
+
       if (!isProtocolMessage(message)) {
         return;
+      }
+      const info = connections.get(socket);
+      if (info) {
+        info.lastActivityAt = Date.now();
+        info.sessionId = message.events[0]?.sessionId ?? info.sessionId;
       }
       for (const event of message.events) {
         const stored = store.add(event);
@@ -71,9 +124,55 @@ export function startWsIngestServer(
     });
   });
 
+  function pickSocket(sessionId?: string): WebSocket | null {
+    let best: WebSocket | null = null;
+    let bestActivity = -1;
+    for (const [socket, info] of connections) {
+      if (socket.readyState !== WebSocket.OPEN) {
+        continue;
+      }
+      if (sessionId !== undefined && info.sessionId !== sessionId) {
+        continue;
+      }
+      if (info.lastActivityAt > bestActivity) {
+        best = socket;
+        bestActivity = info.lastActivityAt;
+      }
+    }
+    return best;
+  }
+
   return {
+    requestSnapshot: (sessionId?: string, timeoutMs: number = SNAPSHOT_TIMEOUT_MS) => {
+      const socket = pickSocket(sessionId);
+      if (!socket) {
+        return Promise.reject(
+          new Error(
+            sessionId === undefined
+              ? 'No browser session is connected to the daemon.'
+              : `No connected browser matches session "${sessionId}".`,
+          ),
+        );
+      }
+      const request: SnapshotRequest = { kind: 'snapshot-request', requestId: randomUUID() };
+      return new Promise<SnapshotResponse>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pendingSnapshots.delete(request.requestId);
+          reject(new Error('The browser did not answer the snapshot request in time.'));
+        }, timeoutMs);
+        pendingSnapshots.set(request.requestId, { resolve, timer });
+        socket.send(JSON.stringify(request));
+      });
+    },
     close: () =>
       new Promise((resolve, reject) => {
+        for (const pending of pendingSnapshots.values()) {
+          clearTimeout(pending.timer);
+        }
+        pendingSnapshots.clear();
+        for (const socket of connections.keys()) {
+          socket.close();
+        }
         wss.close((error) => {
           if (error) {
             reject(error);

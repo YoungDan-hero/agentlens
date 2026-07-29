@@ -1,10 +1,12 @@
-import { DEFAULT_WS_PORT, WS_PATH } from '@agentlensjs/shared';
+import { DEFAULT_WS_PORT, isSnapshotRequest, WS_PATH } from '@agentlensjs/shared';
+import type { SnapshotResponse } from '@agentlensjs/shared';
 
 import { installConsoleCollector } from './collectors/console';
 import { installErrorCollector } from './collectors/errors';
 import { installNetworkCollector } from './collectors/network';
 import type { EventContext } from './events';
 import { buildLifecycleEvent } from './events';
+import { captureLayoutSnapshot } from './snapshot';
 import { Transport } from './transport';
 
 export interface InitOptions {
@@ -45,7 +47,25 @@ export function init(options: InitOptions = {}): AgentLensClient {
     url: window.location.href,
   };
 
-  const transport = new Transport({ endpoint });
+  const transport: Transport = new Transport({
+    endpoint,
+    onMessage: (message) => {
+      if (!isSnapshotRequest(message)) {
+        return;
+      }
+      const { root, truncated } = captureLayoutSnapshot();
+      const response: SnapshotResponse = {
+        kind: 'snapshot-response',
+        requestId: message.requestId,
+        sessionId: context.sessionId,
+        url: window.location.href,
+        capturedAt: Date.now(),
+        root,
+        truncated,
+      };
+      transport.sendRaw(response);
+    },
+  });
   const teardowns = [
     installErrorCollector(transport, context),
     installConsoleCollector(transport, context),

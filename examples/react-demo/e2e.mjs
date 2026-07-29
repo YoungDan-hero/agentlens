@@ -210,6 +210,27 @@ async function main() {
       `health: failedRequestCount >= 2 (got ${health.failedRequestCount})`,
     );
 
+    // Layout snapshot: daemon asks the live page for its box-model tree.
+    const snapshot = await client.callTool('get_layout_snapshot');
+    const findNode = (node, predicate) => {
+      if (!node) return null;
+      if (predicate(node)) return node;
+      for (const child of node.children) {
+        const match = findNode(child, predicate);
+        if (match) return match;
+      }
+      return null;
+    };
+    assert(snapshot.root?.tag === 'body', 'snapshot: layout tree rooted at body');
+    const buttonNode = findNode(
+      snapshot.root,
+      (n) => n.tag === 'button' && /^src\/App\.tsx:\d+$/.test(n.source ?? ''),
+    );
+    assert(
+      buttonNode !== null && buttonNode.visible && buttonNode.rect.width > 0,
+      'snapshot: visible button with source attribution and a real box',
+    );
+
     console.log('6/6 Verifying the fix loop (verify_fix + real HMR)...');
     const uncaught = errors.find((e) => e.subtype === 'uncaught');
     assert(

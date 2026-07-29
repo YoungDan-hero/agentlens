@@ -21,7 +21,7 @@ async function main(): Promise<void> {
   const store = new EventStore();
   const ingest = startWsIngestServer(store, port, new StackResolver());
 
-  const server = createMcpServer(store, VERSION);
+  const server = createMcpServer(store, VERSION, ingest);
   await server.connect(new StdioServerTransport());
 
   // stdout is reserved for the MCP protocol; diagnostics go to stderr.

@@ -81,6 +81,65 @@ export interface ProtocolMessage {
   events: AgentLensEvent[];
 }
 
+/** One element in a structured layout snapshot of the page. */
+export interface LayoutNode {
+  tag: string;
+  /** Source attribution injected by the Vite plugin (`file:line`), if any. */
+  source: string | null;
+  /** Viewport-relative box, rounded to integers. */
+  rect: { x: number; y: number; width: number; height: number };
+  /** False when hidden via display/visibility or zero-sized. */
+  visible: boolean;
+  /** True when content overflows the element's box. */
+  overflow: boolean;
+  /** Direct text content of this element, trimmed and truncated. */
+  text: string | null;
+  children: LayoutNode[];
+}
+
+/** Daemon -> browser: asks the runtime to capture a layout snapshot. */
+export interface SnapshotRequest {
+  kind: 'snapshot-request';
+  requestId: string;
+}
+
+/** Browser -> daemon: the captured snapshot. */
+export interface SnapshotResponse {
+  kind: 'snapshot-response';
+  requestId: string;
+  sessionId: string;
+  url: string;
+  capturedAt: number;
+  /** Null when the document has no body. */
+  root: LayoutNode | null;
+  /** True when the node budget was exhausted and subtrees were dropped. */
+  truncated: boolean;
+}
+
+export function isSnapshotRequest(value: unknown): value is SnapshotRequest {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Partial<SnapshotRequest>;
+  return candidate.kind === 'snapshot-request' && typeof candidate.requestId === 'string';
+}
+
+export function isSnapshotResponse(value: unknown): value is SnapshotResponse {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Partial<SnapshotResponse>;
+  return (
+    candidate.kind === 'snapshot-response' &&
+    typeof candidate.requestId === 'string' &&
+    typeof candidate.sessionId === 'string' &&
+    typeof candidate.url === 'string' &&
+    typeof candidate.capturedAt === 'number' &&
+    typeof candidate.truncated === 'boolean' &&
+    (candidate.root === null || typeof candidate.root === 'object')
+  );
+}
+
 const EVENT_TYPES: readonly AgentLensEventType[] = ['error', 'console', 'network', 'lifecycle'];
 
 function isEventType(value: unknown): value is AgentLensEventType {

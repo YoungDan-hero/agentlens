@@ -79,7 +79,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow.
 ## Roadmap
 
 - [x] M1 — error / console / network capture, source-mapped stack attribution, `get_page_health`, `get_recent_events`, E2E-verified chain
-- [ ] M2 — structured layout snapshots, `data-source` attribution, `verify_fix`
+- [x] M2 — structured layout snapshots, `data-source` attribution, `verify_fix`
 - [ ] M3 — component tree & render statistics (React / Vue), interaction timeline
 
 ## License

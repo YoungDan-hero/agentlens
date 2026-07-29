@@ -20,13 +20,13 @@ class FakeWebSocket {
 
   readyState = FakeWebSocket.CONNECTING;
   sent: string[] = [];
-  private readonly listeners = new Map<string, (() => void)[]>();
+  private readonly listeners = new Map<string, ((event?: unknown) => void)[]>();
 
   constructor(public readonly url: string) {
     FakeWebSocket.instances.push(this);
   }
 
-  addEventListener(type: string, listener: () => void): void {
+  addEventListener(type: string, listener: (event?: unknown) => void): void {
     const existing = this.listeners.get(type) ?? [];
     this.listeners.set(type, [...existing, listener]);
   }
@@ -43,6 +43,12 @@ class FakeWebSocket {
     this.readyState = FakeWebSocket.OPEN;
     for (const listener of this.listeners.get('open') ?? []) {
       listener();
+    }
+  }
+
+  simulateMessage(data: string): void {
+    for (const listener of this.listeners.get('message') ?? []) {
+      listener({ data });
     }
   }
 
@@ -132,6 +138,40 @@ describe('Transport micro-batching', () => {
     const events = socket?.lastMessages()[0]?.events;
     expect(events).toHaveLength(2);
     expect(events?.map((e) => (e.type === 'console' ? e.args[0] : ''))).toEqual(['b', 'c']);
+    transport.close();
+  });
+
+  it('delivers parsed daemon messages to onMessage and ignores junk', () => {
+    const received: unknown[] = [];
+    const transport = new Transport({
+      endpoint: 'ws://localhost:8631/agentlens',
+      onMessage: (message) => received.push(message),
+    });
+    const socket = FakeWebSocket.instances[0];
+    socket?.simulateOpen();
+
+    socket?.simulateMessage(JSON.stringify({ kind: 'snapshot-request', requestId: 'r1' }));
+    socket?.simulateMessage('not json at all');
+
+    expect(received).toEqual([{ kind: 'snapshot-request', requestId: 'r1' }]);
+    transport.close();
+  });
+
+  it('sendRaw bypasses the batch queue and drops when not open', () => {
+    const transport = new Transport({ endpoint: 'ws://localhost:8631/agentlens' });
+    const socket = FakeWebSocket.instances[0];
+
+    transport.sendRaw({ kind: 'snapshot-response' });
+    expect(socket?.sent).toHaveLength(0);
+
+    socket?.simulateOpen();
+    transport.sendRaw({ kind: 'snapshot-response', requestId: 'r1' });
+
+    expect(socket?.sent).toHaveLength(1);
+    expect(JSON.parse(socket?.sent[0] ?? '')).toEqual({
+      kind: 'snapshot-response',
+      requestId: 'r1',
+    });
     transport.close();
   });
 

@@ -15,6 +15,8 @@ export interface TransportOptions {
   batchWindowMs?: number;
   /** A full batch flushes immediately without waiting for the window. */
   maxBatchSize?: number;
+  /** Called for every JSON message the daemon pushes down the socket. */
+  onMessage?: (message: unknown) => void;
 }
 
 const DEFAULT_MAX_QUEUE = 500;
@@ -40,12 +42,14 @@ export class Transport implements EventSink {
   private readonly maxQueueSize: number;
   private readonly batchWindowMs: number;
   private readonly maxBatchSize: number;
+  private readonly onMessage: ((message: unknown) => void) | undefined;
 
   constructor(options: TransportOptions) {
     this.endpoint = options.endpoint;
     this.maxQueueSize = options.maxQueueSize ?? DEFAULT_MAX_QUEUE;
     this.batchWindowMs = options.batchWindowMs ?? DEFAULT_BATCH_WINDOW_MS;
     this.maxBatchSize = options.maxBatchSize ?? DEFAULT_MAX_BATCH_SIZE;
+    this.onMessage = options.onMessage;
     this.connect();
   }
 
@@ -62,6 +66,18 @@ export class Transport implements EventSink {
       return;
     }
     this.scheduleFlush();
+  }
+
+  /**
+   * Sends a payload immediately, bypassing the batch queue. Used for
+   * request/response exchanges (e.g. snapshot responses) that must not be
+   * delayed by the batching window. Dropped when the socket is not open.
+   */
+  sendRaw(payload: unknown): void {
+    if (this.closed || this.socket?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    this.socket.send(JSON.stringify(payload));
   }
 
   close(): void {
@@ -111,6 +127,19 @@ export class Transport implements EventSink {
     socket.addEventListener('open', () => {
       this.reconnectAttempts = 0;
       this.flush();
+    });
+
+    socket.addEventListener('message', (event) => {
+      if (!this.onMessage || typeof event.data !== 'string') {
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      this.onMessage(parsed);
     });
 
     socket.addEventListener('close', () => {

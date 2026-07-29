@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import type { EventStore } from './store';
 import { verifyFix } from './verify-fix';
+import type { WsIngestServer } from './ws-server';
 
 const DEFAULT_HEALTH_WINDOW_MS = 5 * 60 * 1000;
 
@@ -21,7 +22,11 @@ function jsonResult(payload: unknown): TextResult {
  * Exposes the event store to AI agents. Tools are designed around an agent's
  * debugging workflow: a cheap health overview first, then targeted drill-down.
  */
-export function createMcpServer(store: EventStore, version: string): McpServer {
+export function createMcpServer(
+  store: EventStore,
+  version: string,
+  ingest?: Pick<WsIngestServer, 'requestSnapshot'>,
+): McpServer {
   const server = new McpServer({ name: 'agentlens', version });
 
   server.registerTool(
@@ -116,6 +121,34 @@ export function createMcpServer(store: EventStore, version: string): McpServer {
         }),
       ),
   );
+
+  if (ingest) {
+    server.registerTool(
+      'get_layout_snapshot',
+      {
+        title: 'Get layout snapshot',
+        description:
+          'Captures a live structured layout tree of the running page: every visible ' +
+          'element with its box (viewport rect), visibility, overflow state, direct text ' +
+          'and — where available — the source location that rendered it ' +
+          '(data-agentlens-source, "file:line"). Use it to reason about layout and ' +
+          'styling issues without a screenshot, and to locate the code behind any box.',
+        inputSchema: {
+          sessionId: z
+            .string()
+            .optional()
+            .describe('Target a specific page session; defaults to the most active one'),
+        },
+      },
+      async (args) => {
+        try {
+          return jsonResult(await ingest.requestSnapshot(args.sessionId));
+        } catch (error) {
+          return jsonResult({ error: error instanceof Error ? error.message : String(error) });
+        }
+      },
+    );
+  }
 
   return server;
 }
