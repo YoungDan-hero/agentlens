@@ -1,6 +1,6 @@
 {
   "name": "@agentlens/runtime",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "In-browser collector SDK for AgentLens — captures errors, console and network signals during development.",
   "license": "MIT",
   "type": "module",

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
+
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { DEFAULT_WS_PORT } from '@agentlens/shared';
 
@@ -7,7 +9,12 @@ import { StackResolver } from './stack-resolver';
 import { EventStore } from './store';
 import { startWsIngestServer } from './ws-server';
 
-const VERSION = '0.0.0';
+// dist/index.js sits one level below the package root.
+const VERSION = (
+  JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    version: string;
+  }
+).version;
 
 async function main(): Promise<void> {
   const port = resolvePort();
