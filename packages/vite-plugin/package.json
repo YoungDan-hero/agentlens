@@ -1,6 +1,6 @@
 {
   "name": "@agentlensjs/vite-plugin",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Vite plugin that injects the AgentLens runtime SDK into your app during development.",
   "license": "MIT",
   "type": "module",

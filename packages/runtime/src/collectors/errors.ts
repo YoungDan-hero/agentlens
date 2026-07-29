@@ -1,5 +1,5 @@
 import type { EventContext } from '../events';
-import { buildErrorEvent } from '../events';
+import { buildErrorEvent, serializeArg } from '../events';
 import type { EventSink } from '../transport';
 
 /**
@@ -20,7 +20,10 @@ export function installErrorCollector(sink: EventSink, context: EventContext): (
 
   const onRejection = (event: PromiseRejectionEvent): void => {
     const reason: unknown = event.reason;
-    const message = reason instanceof Error ? reason.message : String(reason);
+    // Promises are often rejected with plain objects or arrays (e.g. form
+    // validation error lists); `String()` would collapse those into
+    // "[object Object]", so serialize them like console arguments instead.
+    const message = reason instanceof Error ? reason.message : serializeArg(reason);
     sink.send(
       buildErrorEvent(context, {
         subtype: 'unhandledrejection',

@@ -1,5 +1,12 @@
 # @agentlensjs/vite-plugin
 
+## 0.4.4
+
+### Patch Changes
+
+- Updated dependencies
+  - @agentlensjs/runtime@0.4.2
+
 ## 0.4.3
 
 ### Patch Changes

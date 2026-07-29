@@ -67,6 +67,27 @@ describe('installErrorCollector', () => {
     }
   });
 
+  it('serializes non-Error object and array reasons into readable JSON', () => {
+    const sink = makeSink();
+    teardown = installErrorCollector(sink, context);
+
+    window.dispatchEvent(
+      makeRejectionEvent([
+        { field: 'name', message: 'required' },
+        { field: 'email', message: 'invalid' },
+      ]),
+    );
+
+    const event = sink.events[0];
+    expect(event?.type).toBe('error');
+    if (event?.type === 'error') {
+      expect(event.message).toBe(
+        '[{"field":"name","message":"required"},{"field":"email","message":"invalid"}]',
+      );
+      expect(event.message).not.toContain('[object Object]');
+    }
+  });
+
   it('stops capturing after teardown', () => {
     const sink = makeSink();
     teardown = installErrorCollector(sink, context);

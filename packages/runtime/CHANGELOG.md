@@ -1,5 +1,11 @@
 # @agentlensjs/runtime
 
+## 0.4.2
+
+### Patch Changes
+
+- 修复非 Error 的 Promise rejection reason 序列化：对象/数组类 reason（如表单校验错误列表）此前经 `String()` 兜底会塌缩成一串 "[object Object]"，message 零信息量且污染错误指纹。现改用与 console 参数一致的 `serializeArg`（JSON 序列化 + 2000 字符截断 + 循环引用兜底），产出可读的结构化消息
+
 ## 0.4.1
 
 ### Patch Changes
