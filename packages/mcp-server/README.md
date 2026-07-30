@@ -27,6 +27,7 @@ Register it in your MCP client (e.g. Cursor's `mcp.json`):
 | `verify_fix`               | Closes the loop after a code edit: waits for HMR/reload, then reports whether the error fingerprint recurred           |
 | `get_layout_snapshot`      | Live structured layout tree of the page: boxes, visibility, overflow, text and per-element source attribution          |
 | `get_interaction_timeline` | Cause-and-effect view: user interactions grouped with the errors, requests and logs they triggered                     |
+| `get_performance`          | Current Web Vitals (FCP, LCP, CLS, INP, TTFB with web.dev ratings) and long-task pressure for a session                |
 
 ### Fix verification workflow
 

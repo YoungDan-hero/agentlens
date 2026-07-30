@@ -14,6 +14,16 @@ export default defineConfig({
 });
 ```
 
+### Options
+
+```ts
+agentlens({
+  port: 8631, // daemon port, if you changed it
+  enabled: true, // force-disable injection when needed
+  captureBodies: false, // opt in to capture request/response bodies (redacted)
+});
+```
+
 ## What it does in dev mode
 
 - **Runtime injection** — loads the `@agentlensjs/runtime` collector via a virtual module and reports HMR updates so the daemon's `verify_fix` tool can close the loop.
