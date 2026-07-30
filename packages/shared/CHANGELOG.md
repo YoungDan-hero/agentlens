@@ -1,5 +1,11 @@
 # @agentlensjs/shared
 
+## 0.5.1
+
+### Patch Changes
+
+- df03e30: docs: 包级 README 同步 0.5.0 能力——补充 get_performance 工具、性能/WebSocket/sendBeacon 采集、captureBodies 选项与隐私说明
+
 ## 0.5.0
 
 ### Minor Changes

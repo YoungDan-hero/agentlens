@@ -1,6 +1,6 @@
 {
   "name": "@agentlensjs/mcp-server",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "AgentLens daemon — collects browser runtime signals and exposes them to AI agents over the Model Context Protocol.",
   "license": "MIT",
   "type": "module",
