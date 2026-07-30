@@ -141,6 +141,7 @@ async function main() {
       'btn-404',
       'btn-network-fail',
       'btn-xhr',
+      'btn-beacon',
     ]) {
       await page.click(`#${id}`);
       await sleep(200);
@@ -208,6 +209,23 @@ async function main() {
       'network: XMLHttpRequest (axios-style) request captured',
     );
     assert(
+      network.some((e) => e.transport === 'beacon' && e.requestUrl.includes('/api/beacon')),
+      'network: sendBeacon call captured',
+    );
+    const beaconEvent = network.find((e) => e.transport === 'beacon');
+    assert(
+      beaconEvent?.requestBody?.includes('[REDACTED]') === true &&
+        !beaconEvent.requestBody.includes('hunter2'),
+      'redaction: sensitive body field redacted before shipping',
+    );
+    assert(
+      network.some(
+        (e) =>
+          e.requestUrl.includes('/api/does-not-exist') && e.responseBody?.includes('not found'),
+      ),
+      'network: response body captured when captureBodies is enabled',
+    );
+    assert(
       errors.some((e) => e.frames.some((f) => f.fileName?.includes('App.tsx') && f.line > 0)),
       'sourcemap: error stack resolved to original source (App.tsx)',
     );
@@ -219,6 +237,15 @@ async function main() {
     assert(
       health.failedRequestCount >= 2,
       `health: failedRequestCount >= 2 (got ${health.failedRequestCount})`,
+    );
+
+    // Performance: headless Chrome paints the page, so FCP/LCP must exist.
+    const perf = await client.callTool('get_performance');
+    console.log(`      performance = ${JSON.stringify(perf.webVitals)}`);
+    assert(perf.eventCount >= 1, `performance: events captured (got ${perf.eventCount})`);
+    assert(
+      perf.webVitals.FCP !== null || perf.webVitals.LCP !== null,
+      'performance: FCP or LCP reading present with a rating',
     );
 
     // Layout snapshot: daemon asks the live page for its box-model tree.

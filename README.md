@@ -27,7 +27,8 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 
 - **Errors** — uncaught exceptions and unhandled promise rejections, with stack traces resolved back to your original source files via source maps
 - **Console** — all five levels (`log` / `info` / `warn` / `error` / `debug`) with bounded, safely serialized arguments
-- **Network** — every `fetch` and `XMLHttpRequest` (axios included) with method, status, duration, and the source location that initiated the request
+- **Network** — every `fetch`, `XMLHttpRequest` (axios included), WebSocket connection and `sendBeacon` call with method, status, duration, and the source location that initiated it; request/response bodies optionally captured (opt-in, redacted)
+- **Performance** — Web Vitals (FCP, LCP, CLS, INP, TTFB) with web.dev ratings plus long tasks, via the native `PerformanceObserver` — no extra dependency
 - **User interactions** — clicks, debounced inputs and form submits, each attributed to the source line that rendered the element
 - **Lifecycle** — page loads, SPA route changes, HMR updates and unloads
 
@@ -37,7 +38,7 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 - **Session isolation** — every page load / tab is a separate session; queries scope to the most recently active one by default
 - **Source attribution** — the Vite plugin stamps JSX elements with `data-agentlens-source="file:line"`, so DOM nodes, clicks and layout boxes all trace back to code
 
-**Six MCP tools** for the agent:
+**Seven MCP tools** for the agent:
 
 | Tool                       | What it answers                                                      |
 | -------------------------- | -------------------------------------------------------------------- |
@@ -45,6 +46,7 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 | `get_recent_events`        | "Show me the errors / logs / requests" — filterable drill-down       |
 | `get_interaction_timeline` | "What did the user do to cause this?" — cause-and-effect grouping    |
 | `get_layout_snapshot`      | "What does the page look like?" — structured box tree, no screenshot |
+| `get_performance`          | "Why is the page slow?" — Web Vitals with ratings, long-task load    |
 | `verify_fix`               | "Did my fix work?" — waits for HMR, watches whether the error recurs |
 | `list_sessions`            | "Which tabs / reloads are connected?" — session management           |
 
@@ -53,6 +55,7 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 - **Autonomous debugging** — the agent edits code, checks `get_page_health`, sees a new error with a source-mapped stack pointing at `src/App.tsx:42`, fixes it, and confirms with `verify_fix` — without you touching DevTools.
 - **"It's broken after my change"** — `get_interaction_timeline` shows the click on the submit button, the 500 response it triggered, and the unhandled rejection that followed, as one causal group.
 - **Layout and styling issues** — `get_layout_snapshot` gives the agent a structured view of every box (position, size, visibility, overflow, text) with the source line that rendered it, so "the sidebar overflows" becomes an addressable fact instead of a guess.
+- **Performance regressions** — `get_performance` reports the current Web Vitals with their web.dev ratings and the long-task pressure, so "the page feels slow" turns into "INP is 620 ms (poor) and there are 14 long tasks totalling 2.1 s".
 - **Closing the fix loop** — after editing, the agent calls `verify_fix` with the error's fingerprint; the daemon waits for the HMR update to reach the browser and reports whether the error recurred.
 
 ## Getting started
@@ -80,6 +83,7 @@ The plugin only applies in `serve` mode — production builds are untouched. Opt
 agentlens({
   port: 8631, // daemon port, if you changed it
   enabled: true, // force-disable injection when needed
+  captureBodies: false, // opt in to capture request/response bodies (redacted)
 });
 ```
 
@@ -150,10 +154,20 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow.
 - [x] M2 — structured layout snapshots, `data-source` attribution, `verify_fix`
 - [x] M3 — interaction timeline (cause-and-effect grouping of user actions and their effects)
 
+## Privacy & data safety
+
+AgentLens is a dev-time tool designed so that sensitive data cannot leave your machine:
+
+- **Loopback only** — the daemon binds to `127.0.0.1`; nothing is reachable from the network, and nothing is ever uploaded anywhere.
+- **Headers are never captured** — request/response headers (`Authorization`, `Cookie`, ...) are not collected at all, by design.
+- **Bodies are opt-in and redacted** — request/response bodies ship only with `captureBodies: true`, and even then sensitive fields (`password`, `token`, `secret`, `authorization`, ...) are replaced with `[REDACTED]` inside the browser, before anything leaves the page. Bodies are size-capped (4 KB).
+- **URLs are redacted by default** — sensitive query parameter values (`?token=...`, `?apiKey=...`) are stripped on every network event.
+- **Form values are never captured** — interaction events record the element, not what was typed into it.
+
 ## Known limitations
 
 - **Vite only** — the runtime is injected via `@agentlensjs/vite-plugin`; other bundlers are not supported yet.
-- **No `sendBeacon` / WebSocket capture** — network capture covers `fetch` and `XMLHttpRequest`; beacon and socket traffic is not recorded.
+- **WebSocket frames are not recorded** — connection attempts (open/failure) are captured, message payloads are not.
 - **In-memory store** — the daemon keeps events in a bounded in-memory buffer; restarting the daemon clears history. This is by design for a dev-time tool.
 - **No iframe / shadow DOM traversal** — layout snapshots cover the top-level document only.
 

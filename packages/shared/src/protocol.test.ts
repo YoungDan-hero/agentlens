@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ErrorEvent, SnapshotResponse } from './protocol';
+import type { ErrorEvent, PerformanceEvent, SnapshotResponse } from './protocol';
 import { isAgentLensEvent, isSnapshotRequest, isSnapshotResponse } from './protocol';
 
 const validEvent: ErrorEvent = {
@@ -19,6 +19,21 @@ const validEvent: ErrorEvent = {
 describe('isAgentLensEvent', () => {
   it('accepts a well-formed event', () => {
     expect(isAgentLensEvent(validEvent)).toBe(true);
+  });
+
+  it('accepts performance events', () => {
+    const perfEvent: PerformanceEvent = {
+      id: '5f0c1a1e-0000-4000-8000-000000000001',
+      type: 'performance',
+      timestamp: Date.now(),
+      sessionId: 'session-1',
+      url: 'http://localhost:5173/',
+      metric: 'LCP',
+      value: 1234,
+      rating: 'good',
+      detail: null,
+    };
+    expect(isAgentLensEvent(perfEvent)).toBe(true);
   });
 
   it('rejects primitives and null', () => {

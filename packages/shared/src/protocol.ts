@@ -5,7 +5,8 @@
  * ends can narrow payloads without casting.
  */
 
-export type AgentLensEventType = 'error' | 'console' | 'network' | 'lifecycle' | 'interaction';
+export type AgentLensEventType =
+  'error' | 'console' | 'network' | 'lifecycle' | 'interaction' | 'performance';
 
 export interface BaseEvent {
   /** Unique event id (UUID v4). */
@@ -55,17 +56,33 @@ export interface ConsoleEvent extends BaseEvent {
   args: string[];
 }
 
+/** Which API the request went through. */
+export type NetworkTransport = 'fetch' | 'xhr' | 'websocket' | 'beacon';
+
 export interface NetworkEvent extends BaseEvent {
   type: 'network';
+  transport: NetworkTransport;
   method: string;
+  /** Request URL with sensitive query parameter values redacted. */
   requestUrl: string;
-  /** HTTP status code, or null when the request failed at transport level. */
+  /**
+   * HTTP status code. Null when no response is observable: transport-level
+   * failures, `sendBeacon` (fire-and-forget) and failed WebSocket upgrades.
+   */
   status: number | null;
+  /** For WebSocket connections this is the time until the socket opened. */
   durationMs: number;
   /** Stack captured at request initiation, used to attribute the caller. */
   initiatorStack: string | null;
   /** Source-mapped initiator frames, filled in by the daemon after ingest. */
   initiatorFrames: StackFrame[];
+  /**
+   * Request body, redacted and truncated. Only populated when the runtime
+   * runs with `captureBodies: true`; always null otherwise.
+   */
+  requestBody: string | null;
+  /** Response body, redacted and truncated. Same opt-in as `requestBody`. */
+  responseBody: string | null;
 }
 
 export interface LifecycleEvent extends BaseEvent {
@@ -89,8 +106,26 @@ export interface InteractionEvent extends BaseEvent {
   target: InteractionTarget;
 }
 
+/**
+ * Web Vitals plus long tasks. Time-based metrics are milliseconds;
+ * CLS is the unitless cumulative layout shift score.
+ */
+export type PerformanceMetric = 'FCP' | 'LCP' | 'CLS' | 'INP' | 'TTFB' | 'long-task';
+
+export type PerformanceRating = 'good' | 'needs-improvement' | 'poor';
+
+export interface PerformanceEvent extends BaseEvent {
+  type: 'performance';
+  metric: PerformanceMetric;
+  value: number;
+  /** Web-Vitals threshold rating. Null for metrics without one (long tasks). */
+  rating: PerformanceRating | null;
+  /** Extra attribution, e.g. the culprit container of a long task. */
+  detail: string | null;
+}
+
 export type AgentLensEvent =
-  ErrorEvent | ConsoleEvent | NetworkEvent | LifecycleEvent | InteractionEvent;
+  ErrorEvent | ConsoleEvent | NetworkEvent | LifecycleEvent | InteractionEvent | PerformanceEvent;
 
 /** Envelope sent over the WebSocket connection. */
 export interface ProtocolMessage {
@@ -163,6 +198,7 @@ const EVENT_TYPES: readonly AgentLensEventType[] = [
   'network',
   'lifecycle',
   'interaction',
+  'performance',
 ];
 
 function isEventType(value: unknown): value is AgentLensEventType {

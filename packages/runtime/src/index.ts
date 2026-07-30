@@ -6,8 +6,10 @@ import { installErrorCollector } from './collectors/errors';
 import { installInteractionCollector } from './collectors/interactions';
 import { installNavigationCollector } from './collectors/navigation';
 import { installNetworkCollector } from './collectors/network';
+import { installPerformanceCollector } from './collectors/performance';
 import type { EventContext } from './events';
 import { buildLifecycleEvent } from './events';
+import { redactUrl } from './redact';
 import { captureLayoutSnapshot } from './snapshot';
 import { Transport } from './transport';
 import { generateId } from './uuid';
@@ -15,6 +17,12 @@ import { generateId } from './uuid';
 export interface InitOptions {
   /** Override the daemon WebSocket endpoint. Defaults to `ws://localhost:8631/agentlens`. */
   endpoint?: string;
+  /**
+   * Capture request/response bodies on network events (redacted and
+   * truncated). Off by default: bodies may contain user data.
+   * @default false
+   */
+  captureBodies?: boolean;
 }
 
 export interface AgentLensClient {
@@ -48,8 +56,10 @@ export function init(options: InitOptions = {}): AgentLensClient {
   const context: EventContext = {
     sessionId: generateId(),
     // Read lazily so SPA route changes are reflected in every event's url.
+    // Redacted: page URLs can carry secrets too (SSO ?code=..., hash-router
+    // ...#/page?token=...).
     get url() {
-      return window.location.href;
+      return redactUrl(window.location.href);
     },
   };
 
@@ -64,7 +74,7 @@ export function init(options: InitOptions = {}): AgentLensClient {
         kind: 'snapshot-response',
         requestId: message.requestId,
         sessionId: context.sessionId,
-        url: window.location.href,
+        url: context.url,
         capturedAt: Date.now(),
         root,
         truncated,
@@ -75,9 +85,15 @@ export function init(options: InitOptions = {}): AgentLensClient {
   const teardowns = [
     installErrorCollector(transport, context),
     installConsoleCollector(transport, context),
-    installNetworkCollector(transport, context),
+    installNetworkCollector(transport, context, {
+      captureBodies: options.captureBodies ?? false,
+      // The transport reconnects with `new WebSocket`; the collector must
+      // not observe the runtime's own daemon connection.
+      ignoreWebSocketUrls: [endpoint],
+    }),
     installInteractionCollector(transport, context),
     installNavigationCollector(transport, context),
+    installPerformanceCollector(transport, context),
   ];
 
   // Flush synchronously on pagehide: the batch window would otherwise drop

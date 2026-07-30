@@ -26,9 +26,18 @@ describe('agentlens vite plugin', () => {
     // runtime specifier the user's project cannot resolve.
     expect(code).toContain(`@agentlensjs/vite-plugin/runtime`);
     expect(code).toContain('ws://localhost:9999/agentlens');
+    // Body capture stays opt-out unless the user enables it explicitly.
+    expect(code).toContain('"captureBodies":false');
     // HMR updates must be reported so the daemon's verify_fix can work.
     expect(code).toContain('vite:afterUpdate');
     expect(code).toContain('reportHmrUpdate');
+  });
+
+  it('forwards captureBodies to the runtime init call', () => {
+    const plugin = agentlens({ captureBodies: true });
+    const resolved = callHook(plugin.resolveId, VIRTUAL_MODULE_ID) as string;
+    const code = callHook(plugin.load, resolved) as string;
+    expect(code).toContain('"captureBodies":true');
   });
 
   it('injects a module script tag into the html head', () => {

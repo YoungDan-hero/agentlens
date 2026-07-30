@@ -6,8 +6,13 @@ import type {
   InteractionTarget,
   LifecycleEvent,
   NetworkEvent,
+  NetworkTransport,
+  PerformanceEvent,
+  PerformanceMetric,
+  PerformanceRating,
 } from '@agentlensjs/shared';
 
+import { redactUrl } from './redact';
 import { generateId } from './uuid';
 
 export interface EventContext {
@@ -62,23 +67,49 @@ export function buildConsoleEvent(
 export function buildNetworkEvent(
   context: EventContext,
   input: {
+    transport: NetworkTransport;
     method: string;
     requestUrl: string;
     status: number | null;
     durationMs: number;
     initiatorStack: string | null;
+    requestBody?: string | null;
+    responseBody?: string | null;
   },
 ): NetworkEvent {
   return {
     ...baseFields(context),
     type: 'network',
+    transport: input.transport,
     method: input.method,
-    requestUrl: input.requestUrl,
+    // Centralized here so every transport gets query-parameter redaction.
+    requestUrl: redactUrl(input.requestUrl),
     status: input.status,
     durationMs: input.durationMs,
     initiatorStack: input.initiatorStack,
     // Source-map resolution happens in the daemon; the browser ships raw stacks.
     initiatorFrames: [],
+    requestBody: input.requestBody ?? null,
+    responseBody: input.responseBody ?? null,
+  };
+}
+
+export function buildPerformanceEvent(
+  context: EventContext,
+  input: {
+    metric: PerformanceMetric;
+    value: number;
+    rating: PerformanceRating | null;
+    detail?: string | null;
+  },
+): PerformanceEvent {
+  return {
+    ...baseFields(context),
+    type: 'performance',
+    metric: input.metric,
+    value: input.value,
+    rating: input.rating,
+    detail: input.detail ?? null,
   };
 }
 

@@ -88,6 +88,13 @@ export function App(): JSX.Element {
     xhr.send();
   };
 
+  const sendBeacon = (): void => {
+    record('emitted: sendBeacon POST /api/beacon (fire-and-forget)');
+    // The password field demonstrates body redaction: with captureBodies on,
+    // the captured event shows [REDACTED] instead of the value.
+    navigator.sendBeacon('/api/beacon', JSON.stringify({ step: 'checkout', password: 'hunter2' }));
+  };
+
   return (
     <main style={pageStyle}>
       <h1>AgentLens Demo</h1>
@@ -115,6 +122,9 @@ export function App(): JSX.Element {
       </button>
       <button id="btn-xhr" style={buttonStyle} onClick={xhrMissingEndpoint}>
         6. XHR a 404 endpoint (axios-style)
+      </button>
+      <button id="btn-beacon" style={buttonStyle} onClick={sendBeacon}>
+        7. Send a beacon (fire-and-forget)
       </button>
 
       <section id="signal-log" style={logStyle} aria-live="polite">

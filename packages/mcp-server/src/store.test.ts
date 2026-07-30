@@ -22,11 +22,12 @@ function makeError(overrides: Partial<ErrorEvent> = {}): ErrorEvent {
   };
 }
 
-function makeNetwork(status: number | null): NetworkEvent {
+function makeNetwork(status: number | null, overrides: Partial<NetworkEvent> = {}): NetworkEvent {
   counter += 1;
   return {
     id: `event-${String(counter)}`,
     type: 'network',
+    transport: 'fetch',
     timestamp: Date.now(),
     sessionId: 'session-1',
     url: 'http://localhost:5173/',
@@ -36,6 +37,9 @@ function makeNetwork(status: number | null): NetworkEvent {
     durationMs: 12,
     initiatorStack: null,
     initiatorFrames: [],
+    requestBody: null,
+    responseBody: null,
+    ...overrides,
   };
 }
 
@@ -177,6 +181,14 @@ describe('EventStore', () => {
     expect(summary.errorCount).toBe(1);
     expect(summary.failedRequestCount).toBe(2);
     expect(summary.lastEventAt).not.toBeNull();
+  });
+
+  it('does not count fire-and-forget beacons as failed requests', () => {
+    const store = new EventStore();
+    store.add(makeNetwork(null, { transport: 'beacon', method: 'POST' }));
+    store.add(makeNetwork(null, { transport: 'websocket', method: 'WS' }));
+
+    expect(store.summarize(60_000).failedRequestCount).toBe(1);
   });
 
   it('clears all events', () => {

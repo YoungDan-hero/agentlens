@@ -166,8 +166,13 @@ export class EventStore {
       totalEvents: recent.length,
       errorCount: errors.length,
       errorOccurrences: errors.reduce((sum, event) => sum + event.occurrences, 0),
+      // Beacons are fire-and-forget: their status is null by design, which
+      // must not read as a transport failure.
       failedRequestCount: recent.filter(
-        (event) => event.type === 'network' && (event.status === null || event.status >= 400),
+        (event) =>
+          event.type === 'network' &&
+          event.transport !== 'beacon' &&
+          (event.status === null || event.status >= 400),
       ).length,
       lastEventAt: lastEvent?.timestamp ?? null,
       windowMs,

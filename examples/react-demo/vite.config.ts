@@ -25,5 +25,11 @@ function fakeApi(): Plugin {
 const daemonPort = process.env.AGENTLENS_PORT ? Number(process.env.AGENTLENS_PORT) : undefined;
 
 export default defineConfig({
-  plugins: [react(), agentlens(daemonPort === undefined ? {} : { port: daemonPort }), fakeApi()],
+  plugins: [
+    react(),
+    // captureBodies showcases opt-in body capture with redaction; real
+    // projects should only enable it when body contents matter.
+    agentlens({ captureBodies: true, ...(daemonPort === undefined ? {} : { port: daemonPort }) }),
+    fakeApi(),
+  ],
 });

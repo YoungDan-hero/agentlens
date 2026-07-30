@@ -1,4 +1,4 @@
-import type { ErrorEvent, InteractionEvent } from '@agentlensjs/shared';
+import type { ErrorEvent, InteractionEvent, PerformanceEvent } from '@agentlensjs/shared';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it } from 'vitest';
@@ -39,6 +39,22 @@ function makeInteraction(): InteractionEvent {
   };
 }
 
+function makePerformance(overrides: Partial<PerformanceEvent> = {}): PerformanceEvent {
+  counter += 1;
+  return {
+    id: `event-${String(counter)}`,
+    type: 'performance',
+    timestamp: Date.now(),
+    sessionId: 'session-1',
+    url: 'http://localhost:5173/',
+    metric: 'LCP',
+    value: 1200,
+    rating: 'good',
+    detail: null,
+    ...overrides,
+  };
+}
+
 /** Wires a real MCP client to the server over an in-memory transport. */
 async function connect(
   store: EventStore,
@@ -62,7 +78,7 @@ async function callJson(client: Client, name: string, args?: Record<string, unkn
 }
 
 describe('createMcpServer', () => {
-  it('registers all six tools when an ingest server is provided', async () => {
+  it('registers all seven tools when an ingest server is provided', async () => {
     const client = await connect(new EventStore(), {
       requestSnapshot: () => Promise.reject(new Error('unused')),
     });
@@ -72,6 +88,7 @@ describe('createMcpServer', () => {
       'get_interaction_timeline',
       'get_layout_snapshot',
       'get_page_health',
+      'get_performance',
       'get_recent_events',
       'list_sessions',
       'verify_fix',
@@ -83,7 +100,7 @@ describe('createMcpServer', () => {
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name)).not.toContain('get_layout_snapshot');
-    expect(tools).toHaveLength(5);
+    expect(tools).toHaveLength(6);
   });
 
   it('get_page_health summarizes the store', async () => {
@@ -130,6 +147,26 @@ describe('createMcpServer', () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]?.effects).toHaveLength(1);
     expect(timeline.sessionId).toBe('session-1');
+  });
+
+  it('get_performance reduces metrics for the active session', async () => {
+    const store = new EventStore();
+    store.add(makePerformance({ metric: 'LCP', value: 1200, rating: 'good', timestamp: 1000 }));
+    store.add(
+      makePerformance({ metric: 'LCP', value: 2900, rating: 'needs-improvement', timestamp: 2000 }),
+    );
+    store.add(makePerformance({ metric: 'long-task', value: 180, rating: null, detail: 'script' }));
+    const client = await connect(store);
+
+    const result = await callJson(client, 'get_performance');
+
+    expect(result.sessionId).toBe('session-1');
+    const webVitals = result.webVitals as Record<string, { value: number } | null>;
+    expect(webVitals.LCP?.value).toBe(2900);
+    expect(webVitals.CLS).toBeNull();
+    const longTasks = result.longTasks as { count: number; maxMs: number };
+    expect(longTasks.count).toBe(1);
+    expect(longTasks.maxMs).toBe(180);
   });
 
   it('verify_fix reports an unknown fingerprint as an actionable error', async () => {

@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { EventStore } from './store';
+import { summarizePerformance } from './performance-summary';
 import { buildTimeline } from './timeline';
 import { verifyFix } from './verify-fix';
 import type { WsIngestServer } from './ws-server';
@@ -63,9 +64,12 @@ export function createMcpServer(
       title: 'Get recent events',
       description:
         'Query captured runtime events (errors, console output, network requests, ' +
-        'lifecycle), newest first. Filter by type and time to keep responses small.',
+        'lifecycle, performance), newest first. Filter by type and time to keep ' +
+        'responses small.',
       inputSchema: {
-        type: z.enum(['error', 'console', 'network', 'lifecycle', 'interaction']).optional(),
+        type: z
+          .enum(['error', 'console', 'network', 'lifecycle', 'interaction', 'performance'])
+          .optional(),
         sessionId: z.string().optional().describe('Only events from this page session'),
         sinceMs: z
           .number()
@@ -129,6 +133,43 @@ export function createMcpServer(
         ...buildTimeline(events, {
           ...(args.windowMs !== undefined && { windowMs: args.windowMs }),
         }),
+      });
+    },
+  );
+
+  server.registerTool(
+    'get_performance',
+    {
+      title: 'Get performance metrics',
+      description:
+        'Current Web Vitals (FCP, LCP, CLS, INP, TTFB — each with its web.dev rating) ' +
+        'and long-task pressure (count, total and worst duration) for a page session. ' +
+        'Use this to answer "why is the page slow?" and to check the impact of a ' +
+        'performance fix.',
+      inputSchema: {
+        sessionId: z
+          .string()
+          .optional()
+          .describe('Scope to a page session; defaults to the most recently active one'),
+        sinceMs: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Only consider metrics newer than this epoch-milliseconds timestamp'),
+      },
+    },
+    (args) => {
+      const sessionId = args.sessionId ?? store.listSessions()[0]?.sessionId;
+      const events = store.query({
+        type: 'performance',
+        limit: 200,
+        ...(sessionId !== undefined && { sessionId }),
+        ...(args.sinceMs !== undefined && { sinceMs: args.sinceMs }),
+      });
+      return jsonResult({
+        sessionId: sessionId ?? null,
+        ...summarizePerformance(events),
       });
     },
   );

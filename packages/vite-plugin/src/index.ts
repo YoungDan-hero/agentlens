@@ -17,6 +17,12 @@ export interface AgentLensPluginOptions {
    * @default true in `serve`, never applies in `build`
    */
   enabled?: boolean;
+  /**
+   * Capture request/response bodies on network events (redacted and
+   * truncated). Off by default: bodies may contain user data.
+   * @default false
+   */
+  captureBodies?: boolean;
 }
 
 export const VIRTUAL_MODULE_ID = 'virtual:agentlens';
@@ -29,7 +35,9 @@ const RESOLVED_VIRTUAL_MODULE_ID = `\0${VIRTUAL_MODULE_ID}`;
 export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
   const enabled = options.enabled ?? true;
   const port = options.port ?? DEFAULT_WS_PORT;
+  const captureBodies = options.captureBodies ?? false;
   const endpoint = `ws://localhost:${String(port)}${WS_PATH}`;
+  const initOptions = JSON.stringify({ endpoint, captureBodies });
 
   let root = process.cwd();
 
@@ -75,7 +83,7 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
       return [
         // Resolved through this package's own dependency tree; see runtime.ts.
         `import { init } from '@agentlensjs/vite-plugin/runtime';`,
-        `const client = init({ endpoint: ${JSON.stringify(endpoint)} });`,
+        `const client = init(${initOptions});`,
         `if (import.meta.hot) {`,
         `  import.meta.hot.on('vite:afterUpdate', () => {`,
         `    client.reportHmrUpdate();`,
