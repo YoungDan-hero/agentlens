@@ -25,15 +25,26 @@ async function main(): Promise<void> {
   await server.connect(new StdioServerTransport());
 
   // stdout is reserved for the MCP protocol; diagnostics go to stderr.
-  console.error(`[agentlens] daemon ready — ingesting on ws://localhost:${String(port)}`);
+  console.error(`[agentlens] daemon ready (v${VERSION})`);
 
+  let shuttingDown = false;
   const shutdown = (): void => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
     void ingest.close().finally(() => {
       process.exit(0);
     });
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  // MCP clients (Cursor, Claude Code) stop or reload the server by closing
+  // its stdio pipes, not by signalling. Without these handlers the daemon
+  // would outlive every reload as an orphan and keep the ingest port
+  // occupied, breaking the next daemon with EADDRINUSE.
+  process.stdin.on('end', shutdown);
+  process.stdin.on('close', shutdown);
 }
 
 function resolvePort(): number {

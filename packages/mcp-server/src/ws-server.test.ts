@@ -116,3 +116,66 @@ describe('ws ingest server snapshots', () => {
     await expect(server.requestSnapshot(undefined, 150)).rejects.toThrow('did not answer');
   });
 });
+
+describe('ws ingest server port binding', () => {
+  let server: WsIngestServer | null = null;
+  let blocker: WsIngestServer | null = null;
+  const port = 19_631 + Math.floor(Math.random() * 1000);
+
+  afterEach(async () => {
+    await server?.close();
+    server = null;
+    await blocker?.close();
+    blocker = null;
+  });
+
+  it('retries binding until the previous holder releases the port', async () => {
+    blocker = startWsIngestServer(new EventStore(), port);
+    // Let the blocker finish binding before spawning the contender.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const store = new EventStore();
+    server = startWsIngestServer(store, port, undefined, {
+      bindRetryDelayMs: 50,
+      bindMaxRetries: 20,
+      onFatal: () => {
+        throw new Error('onFatal must not fire when the port frees up');
+      },
+    });
+
+    // Simulates the MCP reload race: the old daemon shuts down shortly
+    // after the new one starts colliding on the port.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await blocker.close();
+    blocker = null;
+
+    // The retry loop should eventually bind and accept runtime traffic.
+    let socket: WebSocket | null = null;
+    for (let attempt = 0; attempt < 40 && socket === null; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      try {
+        socket = await connectRuntime(port, 'session-retry');
+      } catch {
+        socket = null;
+      }
+    }
+    expect(socket).not.toBeNull();
+    expect(store.size).toBe(1);
+    socket?.close();
+  });
+
+  it('reports a fatal error once bind retries are exhausted', async () => {
+    blocker = startWsIngestServer(new EventStore(), port);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const fatal = new Promise<number>((resolve) => {
+      server = startWsIngestServer(new EventStore(), port, undefined, {
+        bindRetryDelayMs: 20,
+        bindMaxRetries: 2,
+        onFatal: resolve,
+      });
+    });
+
+    await expect(fatal).resolves.toBe(1);
+  });
+});
