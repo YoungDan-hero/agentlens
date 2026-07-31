@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 
 import type { LifecycleEvent, SnapshotResponse } from '@agentlensjs/shared';
@@ -114,6 +114,106 @@ describe('ws ingest server snapshots', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     await expect(server.requestSnapshot(undefined, 150)).rejects.toThrow('did not answer');
+  });
+});
+
+describe('ws ingest server security boundary', () => {
+  let server: WsIngestServer | null = null;
+  const sockets: WebSocket[] = [];
+  const port = 17_631 + Math.floor(Math.random() * 1000);
+  const wsUrl = `ws://localhost:${String(port)}${WS_PATH}`;
+
+  afterEach(async () => {
+    for (const socket of sockets) {
+      socket.close();
+    }
+    sockets.length = 0;
+    await server?.close();
+    server = null;
+    vi.restoreAllMocks();
+  });
+
+  async function connectWithOrigin(origin?: string): Promise<'open' | 'rejected'> {
+    const socket = new WebSocket(wsUrl, origin === undefined ? {} : { origin });
+    sockets.push(socket);
+    return new Promise((resolve) => {
+      socket.on('open', () => {
+        resolve('open');
+      });
+      socket.on('error', () => {
+        resolve('rejected');
+      });
+    });
+  }
+
+  it('accepts local dev origins and originless clients', async () => {
+    server = startWsIngestServer(new EventStore(), port);
+    await expect(connectWithOrigin(undefined)).resolves.toBe('open');
+    await expect(connectWithOrigin('http://localhost:5173')).resolves.toBe('open');
+    await expect(connectWithOrigin('http://192.168.1.20:5173')).resolves.toBe('open');
+  });
+
+  it('rejects handshakes from public web origins', async () => {
+    server = startWsIngestServer(new EventStore(), port);
+    await expect(connectWithOrigin('https://evil.example.com')).resolves.toBe('rejected');
+    await expect(connectWithOrigin('null')).resolves.toBe('rejected');
+  });
+
+  it('accepts origins from the extra allow-list', async () => {
+    server = startWsIngestServer(new EventStore(), port, undefined, {
+      allowedOrigins: ['https://preview.example.com'],
+    });
+    await expect(connectWithOrigin('https://preview.example.com')).resolves.toBe('open');
+  });
+
+  it('logs (once) and drops batches with a mismatched protocol version', async () => {
+    const store = new EventStore();
+    server = startWsIngestServer(store, port);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const socket = new WebSocket(wsUrl);
+    sockets.push(socket);
+    await new Promise<void>((resolve, reject) => {
+      socket.on('open', resolve);
+      socket.on('error', reject);
+    });
+    const staleBatch = JSON.stringify({ protocolVersion: -1, events: [makeLifecycle('s1')] });
+    socket.send(staleBatch);
+    socket.send(staleBatch);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(store.size).toBe(0);
+    const versionWarnings = errorSpy.mock.calls.filter((call) =>
+      String(call[0]).includes('protocol'),
+    );
+    expect(versionWarnings).toHaveLength(1);
+  });
+
+  it('drops malformed events but keeps valid ones from the same batch', async () => {
+    const store = new EventStore();
+    server = startWsIngestServer(store, port);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const socket = new WebSocket(wsUrl);
+    sockets.push(socket);
+    await new Promise<void>((resolve, reject) => {
+      socket.on('open', resolve);
+      socket.on('error', reject);
+    });
+    socket.send(
+      JSON.stringify({
+        protocolVersion: PROTOCOL_VERSION,
+        events: [
+          // Shallow-valid but missing the whole error payload.
+          { id: 'x', timestamp: 1, sessionId: 's1', url: 'http://localhost/', type: 'error' },
+          makeLifecycle('s1'),
+        ],
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(store.size).toBe(1);
+    expect(errorSpy.mock.calls.some((call) => String(call[0]).includes('malformed'))).toBe(true);
   });
 });
 

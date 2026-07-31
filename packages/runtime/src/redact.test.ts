@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   MAX_BODY_LENGTH,
@@ -8,7 +8,12 @@ import {
   redactBodyText,
   redactUrl,
   sanitizeBody,
+  setExtraRedactKeys,
 } from './redact';
+
+afterEach(() => {
+  setExtraRedactKeys([]);
+});
 
 describe('isSensitiveKey', () => {
   it('matches credential-like keys regardless of casing and separators', () => {
@@ -37,6 +42,28 @@ describe('isSensitiveKey', () => {
     for (const key of ['author', 'authorName', 'name', 'email', 'query', 'page']) {
       expect(isSensitiveKey(key), key).toBe(false);
     }
+  });
+
+  it('honours project-specific extra keys (substring, case-insensitive)', () => {
+    expect(isSensitiveKey('idCard')).toBe(false);
+    setExtraRedactKeys(['idCard', ' mobile ']);
+    expect(isSensitiveKey('idCard')).toBe(true);
+    expect(isSensitiveKey('userIdCardNo')).toBe(true);
+    expect(isSensitiveKey('MOBILE_PHONE')).toBe(true);
+    expect(isSensitiveKey('email')).toBe(false);
+    // Blank entries must not turn the matcher into match-everything.
+    setExtraRedactKeys(['', '  ']);
+    expect(isSensitiveKey('email')).toBe(false);
+  });
+
+  it('extra keys flow through body and URL redaction', () => {
+    setExtraRedactKeys(['idCard']);
+    expect(redactBodyText('{"idCard":"110101199001011234","name":"a"}')).toBe(
+      `{"idCard":"${REDACTED}","name":"a"}`,
+    );
+    expect(redactUrl('/api/user?idCard=110101199001011234')).toBe(
+      `/api/user?idCard=${encodeURIComponent(REDACTED)}`,
+    );
   });
 });
 

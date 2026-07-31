@@ -33,10 +33,15 @@ Register it in your MCP client (e.g. Cursor's `mcp.json`):
 
 Every captured error carries a daemon-assigned `fingerprint`. After editing code, an agent calls `verify_fix` with that fingerprint; the tool waits for the new code to reach the browser (hot module update or full reload, reported by the runtime), then observes a quiet window for recurrence. Interaction-triggered errors still need the interaction to be re-triggered for full certainty — the result says so explicitly.
 
+### Ingest security
+
+The ingest endpoint binds to `127.0.0.1` and additionally rejects WebSocket handshakes whose `Origin` is not a local dev origin (loopback, `*.localhost`, RFC 1918 hosts) — a malicious website open in the same browser cannot connect and inject forged events into an agent's context. Every accepted event is schema-validated field-by-field before it reaches the store; malformed payloads and mismatched protocol versions are dropped with a diagnostic on stderr.
+
 ### Environment variables
 
-| Variable         | Default | Description                                                  |
-| ---------------- | ------- | ------------------------------------------------------------ |
-| `AGENTLENS_PORT` | `8631`  | WebSocket port the daemon listens on for runtime connections |
+| Variable                    | Default | Description                                                    |
+| --------------------------- | ------- | -------------------------------------------------------------- |
+| `AGENTLENS_PORT`            | `8631`  | WebSocket port the daemon listens on for runtime connections   |
+| `AGENTLENS_ALLOWED_ORIGINS` | —       | Comma-separated extra origins allowed to connect (exact match) |
 
 See the [AgentLens monorepo](https://github.com/YoungDan-hero/agentlens) for full documentation.

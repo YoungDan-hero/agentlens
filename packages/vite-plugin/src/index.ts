@@ -23,6 +23,12 @@ export interface AgentLensPluginOptions {
    * @default false
    */
   captureBodies?: boolean;
+  /**
+   * Project-specific sensitive key names to redact on top of the built-in
+   * set (password, token, secret, ...). Case-insensitive substring match.
+   * @example ['idCard', 'mobile']
+   */
+  redactKeys?: string[];
 }
 
 export const VIRTUAL_MODULE_ID = 'virtual:agentlens';
@@ -36,8 +42,9 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
   const enabled = options.enabled ?? true;
   const port = options.port ?? DEFAULT_WS_PORT;
   const captureBodies = options.captureBodies ?? false;
+  const redactKeys = options.redactKeys ?? [];
   const endpoint = `ws://localhost:${String(port)}${WS_PATH}`;
-  const initOptions = JSON.stringify({ endpoint, captureBodies });
+  const initOptions = JSON.stringify({ endpoint, captureBodies, redactKeys });
 
   let root = process.cwd();
 

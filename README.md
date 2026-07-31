@@ -84,6 +84,7 @@ agentlens({
   port: 8631, // daemon port, if you changed it
   enabled: true, // force-disable injection when needed
   captureBodies: false, // opt in to capture request/response bodies (redacted)
+  redactKeys: ['idCard', 'mobile'], // project-specific sensitive keys, on top of the built-ins
 });
 ```
 
@@ -148,8 +149,11 @@ The dynamic import behind the env check keeps the SDK out of production bundles 
 init({
   endpoint: 'ws://localhost:8631/agentlens', // match AGENTLENS_PORT if you changed it
   captureBodies: false, // opt in to request/response bodies (redacted)
+  redactKeys: ['idCard', 'mobile'], // project-specific sensitive keys
 });
 ```
+
+One caveat inherent to this pattern: collectors only exist once the dynamically imported chunk has loaded, so signals fired synchronously during application startup are not captured. This exact integration is exercised by an automated smoke test in [`examples/webpack-demo`](./examples/webpack-demo).
 
 Everything above works with manual setup — errors, console, network, performance, interactions, layout snapshots and all seven MCP tools — with two degradations:
 
@@ -204,10 +208,14 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow.
 AgentLens is a dev-time tool designed so that sensitive data cannot leave your machine:
 
 - **Loopback only** — the daemon binds to `127.0.0.1`; nothing is reachable from the network, and nothing is ever uploaded anywhere.
+- **Origin-gated ingest** — loopback binding does not stop _pages_, so the daemon additionally rejects WebSocket handshakes from non-local origins. A malicious website open in your browser cannot connect and inject forged events into your agent's context. Extra origins can be trusted via `AGENTLENS_ALLOWED_ORIGINS`.
+- **Schema-validated events** — every ingested event is deep-validated field-by-field; malformed payloads never reach the store (or your agent).
 - **Headers are never captured** — request/response headers (`Authorization`, `Cookie`, ...) are not collected at all, by design.
-- **Bodies are opt-in and redacted** — request/response bodies ship only with `captureBodies: true`, and even then sensitive fields (`password`, `token`, `secret`, `authorization`, ...) are replaced with `[REDACTED]` inside the browser, before anything leaves the page. Bodies are size-capped (4 KB).
+- **Bodies are opt-in and redacted** — request/response bodies ship only with `captureBodies: true`, and even then sensitive fields (`password`, `token`, `secret`, `authorization`, ...) are replaced with `[REDACTED]` inside the browser, before anything leaves the page. Add project-specific keys (e.g. `idCard`) with the `redactKeys` option. Bodies are size-capped (4 KB).
 - **URLs are redacted by default** — sensitive query parameter values (`?token=...`, `?apiKey=...`) are stripped on every network event.
 - **Form values are never captured** — interaction events record the element, not what was typed into it.
+
+Found a vulnerability? Please report it privately — see [SECURITY.md](./SECURITY.md).
 
 ## Design decisions
 

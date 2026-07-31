@@ -44,5 +44,20 @@ export default tseslint.config(
       globals: globals.node,
     },
   },
+  {
+    // CommonJS config files (webpack.config.cjs, ...) legitimately require().
+    files: ['**/*.cjs'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
+  {
+    // Demo app sources run in the browser; `process.env` is inlined by the
+    // bundler's DefinePlugin, hence the combined global sets.
+    files: ['examples/*/src/**/*.js'],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.node },
+    },
+  },
   prettier,
 );

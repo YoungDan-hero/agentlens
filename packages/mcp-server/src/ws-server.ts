@@ -1,21 +1,14 @@
-import {
-  isAgentLensEvent,
-  isSnapshotResponse,
-  PROTOCOL_VERSION,
-  WS_PATH,
-} from '@agentlensjs/shared';
-import type {
-  AgentLensEvent,
-  ProtocolMessage,
-  SnapshotRequest,
-  SnapshotResponse,
-} from '@agentlensjs/shared';
+import { isSnapshotResponse, PROTOCOL_VERSION, WS_PATH } from '@agentlensjs/shared';
+import type { AgentLensEvent, SnapshotRequest, SnapshotResponse } from '@agentlensjs/shared';
 import { randomUUID } from 'node:crypto';
+import type { IncomingMessage } from 'node:http';
 import type { RawData } from 'ws';
 import { WebSocketServer, WebSocket } from 'ws';
 
+import { isAllowedOrigin } from './origin';
 import type { StackResolver } from './stack-resolver';
 import type { EventStore } from './store';
+import { parseEvent } from './validate';
 
 const SNAPSHOT_TIMEOUT_MS = 5000;
 const BIND_RETRY_DELAY_MS = 500;
@@ -39,11 +32,36 @@ export interface WsIngestServerOptions {
   bindMaxRetries?: number;
   /** Called when the server cannot recover. Defaults to `process.exit`. */
   onFatal?: (code: number) => void;
+  /**
+   * Extra `Origin` header values allowed to connect, on top of the
+   * built-in local allowances (loopback, `*.localhost`, RFC 1918 hosts).
+   */
+  allowedOrigins?: readonly string[];
 }
 
 interface ConnectionInfo {
   sessionId: string | null;
   lastActivityAt: number;
+  /** Diagnostics are logged once per connection to avoid stderr storms. */
+  warnedVersionMismatch: boolean;
+  warnedMalformedEvents: boolean;
+}
+
+/** Envelope shape check; individual events are validated separately. */
+interface Envelope {
+  protocolVersion: number;
+  events: unknown[];
+}
+
+function parseEnvelope(value: unknown): Envelope | null {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+  const candidate = value as { protocolVersion?: unknown; events?: unknown };
+  if (typeof candidate.protocolVersion !== 'number' || !Array.isArray(candidate.events)) {
+    return null;
+  }
+  return { protocolVersion: candidate.protocolVersion, events: candidate.events };
 }
 
 /**
@@ -77,6 +95,8 @@ export function startWsIngestServer(
   const bindRetryDelayMs = options.bindRetryDelayMs ?? BIND_RETRY_DELAY_MS;
   const bindMaxRetries = options.bindMaxRetries ?? BIND_MAX_RETRIES;
   const onFatal = options.onFatal ?? ((code: number) => process.exit(code));
+  const allowedOrigins = options.allowedOrigins ?? [];
+  const rejectedOrigins = new Set<string>();
 
   const connections = new Map<WebSocket, ConnectionInfo>();
   const pendingSnapshots = new Map<
@@ -90,7 +110,12 @@ export function startWsIngestServer(
   let closed = false;
 
   const handleConnection = (socket: WebSocket): void => {
-    connections.set(socket, { sessionId: null, lastActivityAt: Date.now() });
+    connections.set(socket, {
+      sessionId: null,
+      lastActivityAt: Date.now(),
+      warnedVersionMismatch: false,
+      warnedMalformedEvents: false,
+    });
 
     socket.on('close', () => {
       connections.delete(socket);
@@ -114,15 +139,45 @@ export function startWsIngestServer(
         return;
       }
 
-      if (!isProtocolMessage(message)) {
+      const envelope = parseEnvelope(message);
+      if (!envelope) {
         return;
       }
       const info = connections.get(socket);
+
+      // Never silently drop a whole client: a version skew between runtime
+      // and daemon must be diagnosable from the daemon log.
+      if (envelope.protocolVersion !== PROTOCOL_VERSION) {
+        if (info && !info.warnedVersionMismatch) {
+          info.warnedVersionMismatch = true;
+          console.error(
+            `[agentlens] dropping events from a client speaking protocol ` +
+              `v${String(envelope.protocolVersion)}; this daemon speaks ` +
+              `v${String(PROTOCOL_VERSION)}. Update @agentlensjs/runtime (or the ` +
+              `Vite plugin) and @agentlensjs/mcp-server to matching versions.`,
+          );
+        }
+        return;
+      }
+
       if (info) {
         info.lastActivityAt = Date.now();
-        info.sessionId = message.events[0]?.sessionId ?? info.sessionId;
       }
-      for (const event of message.events) {
+      for (const rawEvent of envelope.events) {
+        const event = parseEvent(rawEvent);
+        if (!event) {
+          if (info && !info.warnedMalformedEvents) {
+            info.warnedMalformedEvents = true;
+            console.error(
+              '[agentlens] dropped malformed event(s) from a connected client; ' +
+                'payloads that fail schema validation are never stored.',
+            );
+          }
+          continue;
+        }
+        if (info) {
+          info.sessionId = event.sessionId;
+        }
         const stored = store.add(event);
         // Folded duplicates reuse the canonical record's resolved frames.
         if (resolver && stored === event) {
@@ -135,7 +190,29 @@ export function startWsIngestServer(
   const listen = (): void => {
     // Loopback only: events arrive unauthenticated, so the ingest endpoint
     // must never be reachable from other machines on the network.
-    wss = new WebSocketServer({ host: '127.0.0.1', port, path: WS_PATH });
+    wss = new WebSocketServer({
+      host: '127.0.0.1',
+      port,
+      path: WS_PATH,
+      // Loopback binding does not stop pages: any website in the user's
+      // browser can attempt a WebSocket handshake to 127.0.0.1. The Origin
+      // header is browser-controlled and unforgeable, so gate on it.
+      verifyClient: (info: { origin: string; secure: boolean; req: IncomingMessage }) => {
+        const origin = info.req.headers.origin;
+        if (isAllowedOrigin(origin, allowedOrigins)) {
+          return true;
+        }
+        if (origin !== undefined && !rejectedOrigins.has(origin)) {
+          rejectedOrigins.add(origin);
+          console.error(
+            `[agentlens] rejected a WebSocket connection from disallowed ` +
+              `origin "${origin}". Local dev origins are allowed automatically; ` +
+              `trust additional ones via AGENTLENS_ALLOWED_ORIGINS.`,
+          );
+        }
+        return false;
+      },
+    });
 
     wss.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE' && bindAttempts < bindMaxRetries && !closed) {
@@ -253,16 +330,4 @@ function rawDataToString(raw: RawData): string {
     return Buffer.concat(raw).toString('utf8');
   }
   return Buffer.from(raw).toString('utf8');
-}
-
-function isProtocolMessage(value: unknown): value is ProtocolMessage {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-  const candidate = value as Partial<ProtocolMessage>;
-  return (
-    candidate.protocolVersion === PROTOCOL_VERSION &&
-    Array.isArray(candidate.events) &&
-    candidate.events.every(isAgentLensEvent)
-  );
 }

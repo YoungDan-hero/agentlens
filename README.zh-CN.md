@@ -84,6 +84,7 @@ agentlens({
   port: 8631, // daemon 端口（如有修改）
   enabled: true, // 需要时可强制关闭注入
   captureBodies: false, // 显式开启后才捕获请求/响应体（自动脱敏）
+  redactKeys: ['idCard', 'mobile'], // 项目自定义敏感字段，叠加在内置规则之上
 });
 ```
 
@@ -148,8 +149,11 @@ if (process.env.NODE_ENV === 'development') {
 init({
   endpoint: 'ws://localhost:8631/agentlens', // 如修改过 AGENTLENS_PORT，保持一致
   captureBodies: false, // 显式开启后才捕获请求/响应体（自动脱敏）
+  redactKeys: ['idCard', 'mobile'], // 项目自定义敏感字段
 });
 ```
+
+这个模式有一个固有限制：采集器要等动态 import 的 chunk 加载完成后才存在，应用启动期间**同步**触发的信号不会被捕获。该接入方式由 [`examples/webpack-demo`](./examples/webpack-demo) 中的自动化冒烟测试持续验证。
 
 手动接入模式下，上述全部能力可用——错误、控制台、网络、性能、交互、布局快照，以及全部七个 MCP 工具——只有两处降级：
 
@@ -214,10 +218,14 @@ pnpm typecheck  # 类型检查
 AgentLens 是开发期工具，从设计上保证敏感数据不出本机：
 
 - **仅回环地址** —— daemon 只绑定 `127.0.0.1`，局域网不可达，任何数据都不会上传到任何地方。
+- **Origin 门禁** —— 回环绑定挡不住*网页*：WebSocket 握手不受同源策略约束，所以 daemon 还会拒绝所有非本地 Origin 的握手。浏览器里打开的恶意网站无法连上 daemon、向 Agent 的上下文注入伪造事件。需要信任额外来源时用 `AGENTLENS_ALLOWED_ORIGINS`。
+- **事件深度校验** —— 每个入库事件都逐字段做 schema 校验，畸形载荷到不了存储层（也到不了 Agent）。
 - **请求头永不采集** —— `Authorization`、`Cookie` 等请求/响应头从设计上就不收集，无需事后擦除。
-- **请求体默认不采集、开启后自动脱敏** —— 只有显式设置 `captureBodies: true` 才捕获请求/响应体；即便开启，`password`、`token`、`secret`、`authorization` 等敏感字段也会在浏览器内先替换为 `[REDACTED]` 再发出，且限长 4KB。
+- **请求体默认不采集、开启后自动脱敏** —— 只有显式设置 `captureBodies: true` 才捕获请求/响应体；即便开启，`password`、`token`、`secret`、`authorization` 等敏感字段也会在浏览器内先替换为 `[REDACTED]` 再发出，且限长 4KB。项目自定义敏感字段（如 `idCard`）用 `redactKeys` 选项追加。
 - **URL 默认脱敏** —— 每个网络事件的 `?token=...`、`?apiKey=...` 等敏感查询参数值一律擦除。
 - **表单值永不采集** —— 交互事件只记录元素本身，不记录用户输入的内容。
+
+发现安全漏洞？请通过私密渠道报告——见 [SECURITY.md](./SECURITY.md)。
 
 ## 设计决策
 

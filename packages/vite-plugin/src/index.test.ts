@@ -40,6 +40,13 @@ describe('agentlens vite plugin', () => {
     expect(code).toContain('"captureBodies":true');
   });
 
+  it('forwards redactKeys to the runtime init call', () => {
+    const plugin = agentlens({ redactKeys: ['idCard', 'mobile'] });
+    const resolved = callHook(plugin.resolveId, VIRTUAL_MODULE_ID) as string;
+    const code = callHook(plugin.load, resolved) as string;
+    expect(code).toContain('"redactKeys":["idCard","mobile"]');
+  });
+
   it('injects a module script tag into the html head', () => {
     const plugin = agentlens();
     const tags = callHook(plugin.transformIndexHtml) as HtmlTagDescriptor[];

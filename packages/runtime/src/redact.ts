@@ -18,8 +18,26 @@ export const REDACTED = '[REDACTED]';
 const SENSITIVE_KEY_PATTERN =
   /pass(word|wd)?|pwd|secret|token|credential|cookie|session|api[-_]?key|authorization|auth(?!or)/i;
 
+let extraKeyNeedles: readonly string[] = [];
+
+/**
+ * Registers project-specific sensitive key needles on top of the built-in
+ * pattern (same semantics: case-insensitive substring match). Wired up from
+ * `init({ redactKeys })`; calling again replaces the previous set.
+ */
+export function setExtraRedactKeys(keys: readonly string[]): void {
+  extraKeyNeedles = keys.map((key) => key.trim().toLowerCase()).filter((key) => key.length > 0);
+}
+
 export function isSensitiveKey(key: string): boolean {
-  return SENSITIVE_KEY_PATTERN.test(key);
+  if (SENSITIVE_KEY_PATTERN.test(key)) {
+    return true;
+  }
+  if (extraKeyNeedles.length === 0) {
+    return false;
+  }
+  const lower = key.toLowerCase();
+  return extraKeyNeedles.some((needle) => lower.includes(needle));
 }
 
 /**

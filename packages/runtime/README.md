@@ -12,7 +12,7 @@ In-browser collector SDK for AgentLens. Captures runtime signals during developm
 
 Events are micro-batched over a single WebSocket with bounded buffering and exponential-backoff reconnection. Pending events are flushed on page hide so the last moments of a session are not lost.
 
-Privacy by design: request headers are never collected; sensitive URL query parameters are always redacted; bodies ship only when explicitly opted in, with sensitive fields replaced by `[REDACTED]` inside the browser before anything leaves the page.
+Privacy by design: request headers are never collected; sensitive URL query parameters are always redacted; bodies ship only when explicitly opted in, with sensitive fields replaced by `[REDACTED]` inside the browser before anything leaves the page. Project-specific key names (e.g. `idCard`, `mobile`) can be added via `init({ redactKeys })`.
 
 Development-only by design: it is injected by `@agentlensjs/vite-plugin` in `serve` mode and adds zero overhead to production builds.
 
@@ -27,10 +27,13 @@ if (process.env.NODE_ENV === 'development') {
     init({
       // endpoint: 'ws://localhost:8631/agentlens', // match AGENTLENS_PORT if changed
       // captureBodies: false, // opt in to request/response bodies (redacted)
+      // redactKeys: ['idCard'], // project-specific sensitive keys
     });
   });
 }
 ```
+
+Note that collectors only exist once the dynamically imported chunk has loaded: signals fired synchronously during application startup (before that tick) are not captured.
 
 All signals and MCP tools work in this mode. Two degradations compared to the Vite plugin: no `file:line` source attribution (elements are described by tag / id / class), and `verify_fix` relies on full page reloads unless you wire your bundler's HMR API to the returned client's `reportHmrUpdate()`.
 

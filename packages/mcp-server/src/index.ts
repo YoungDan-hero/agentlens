@@ -5,6 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { DEFAULT_WS_PORT } from '@agentlensjs/shared';
 
 import { createMcpServer } from './mcp';
+import { parseAllowedOrigins } from './origin';
 import { StackResolver } from './stack-resolver';
 import { EventStore } from './store';
 import { startWsIngestServer } from './ws-server';
@@ -19,7 +20,9 @@ const VERSION = (
 async function main(): Promise<void> {
   const port = resolvePort();
   const store = new EventStore();
-  const ingest = startWsIngestServer(store, port, new StackResolver());
+  const ingest = startWsIngestServer(store, port, new StackResolver(), {
+    allowedOrigins: parseAllowedOrigins(process.env.AGENTLENS_ALLOWED_ORIGINS),
+  });
 
   const server = createMcpServer(store, VERSION, ingest);
   await server.connect(new StdioServerTransport());

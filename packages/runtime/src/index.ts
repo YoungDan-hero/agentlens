@@ -9,7 +9,7 @@ import { installNetworkCollector } from './collectors/network';
 import { installPerformanceCollector } from './collectors/performance';
 import type { EventContext } from './events';
 import { buildLifecycleEvent } from './events';
-import { redactUrl } from './redact';
+import { redactUrl, setExtraRedactKeys } from './redact';
 import { captureLayoutSnapshot } from './snapshot';
 import { Transport } from './transport';
 import { generateId } from './uuid';
@@ -23,6 +23,13 @@ export interface InitOptions {
    * @default false
    */
   captureBodies?: boolean;
+  /**
+   * Project-specific sensitive key names to redact on top of the built-in
+   * set (password, token, secret, ...). Case-insensitive substring match,
+   * applied to URL query parameters and captured body fields.
+   * @example ['idCard', 'mobile']
+   */
+  redactKeys?: string[];
 }
 
 export interface AgentLensClient {
@@ -51,6 +58,10 @@ export function init(options: InitOptions = {}): AgentLensClient {
   if (window.__AGENTLENS__) {
     return window.__AGENTLENS__;
   }
+
+  // Must precede collector installation: every later redaction call
+  // (URLs, bodies) consults this set.
+  setExtraRedactKeys(options.redactKeys ?? []);
 
   const endpoint = options.endpoint ?? `ws://localhost:${String(DEFAULT_WS_PORT)}${WS_PATH}`;
   const context: EventContext = {

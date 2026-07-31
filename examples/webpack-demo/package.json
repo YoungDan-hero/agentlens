@@ -1,0 +1,18 @@
+{
+  "name": "webpack-demo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "AgentLens manual-integration smoke test: a plain webpack app using @agentlensjs/runtime directly, without the Vite plugin.",
+  "scripts": {
+    "dev": "webpack serve",
+    "e2e": "node e2e.mjs"
+  },
+  "devDependencies": {
+    "@agentlensjs/runtime": "workspace:*",
+    "html-webpack-plugin": "^5.6.0",
+    "playwright-core": "^1.62.0",
+    "webpack": "^5.95.0",
+    "webpack-cli": "^6.0.1",
+    "webpack-dev-server": "^5.1.0"
+  }
+}
