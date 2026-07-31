@@ -222,7 +222,7 @@ The daemon keeps events in a bounded in-memory buffer; restarting it clears all 
 
 ## Known limitations
 
-- **First-class plugin is Vite-only** — on other bundlers, use the [manual setup](#using-without-vite); you keep all signals and tools, but lose `file:line` source attribution.
+- **Vite-only** — on other bundlers, use the [manual setup](#using-without-vite); you keep all signals and tools, but lose `file:line` source attribution.
 - **WebSocket frames are not recorded** — connection attempts (open/failure) are captured, message payloads are not.
 - **In-memory store** — restarting the daemon clears history; see [Design decisions](#design-decisions) for why this stays.
 - **No iframe / shadow DOM traversal** — layout snapshots cover the top-level document only.
