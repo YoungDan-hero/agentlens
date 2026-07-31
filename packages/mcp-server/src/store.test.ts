@@ -102,6 +102,22 @@ describe('EventStore', () => {
     expect(summary.errorOccurrences).toBe(2);
   });
 
+  it('surfaces a recurring folded error at the newest query position', () => {
+    const store = new EventStore();
+    const stack = 'Error: boom\n    at render (App.tsx:1:1)';
+    const now = Date.now();
+    const error = store.add(makeError({ stack, timestamp: now - 1000 }));
+    // Newer unrelated events would bury the error at its original slot.
+    store.add(makeNetwork(200, { timestamp: now - 500 }));
+    store.add(makeNetwork(201, { timestamp: now - 400 }));
+    // The recurrence must pull the canonical record back to the front.
+    store.add(makeError({ stack, timestamp: now }));
+
+    const latest = store.query({ limit: 2 });
+    expect(latest[0]?.id).toBe(error.id);
+    expect(store.size).toBe(3);
+  });
+
   it('does not fold errors thrown from different locations', () => {
     const store = new EventStore();
     store.add(makeError({ stack: 'Error: boom\n    at a (A.tsx:1:1)' }));

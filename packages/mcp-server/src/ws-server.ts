@@ -70,14 +70,23 @@ function parseEnvelope(value: unknown): Envelope | null {
  * stay fast and pick up frames as soon as resolution completes.
  */
 function resolveStacks(event: AgentLensEvent, resolver: StackResolver): void {
+  // Swallow resolver failures: Node treats an unhandled rejection as fatal,
+  // and one corrupt source map must not take down the whole daemon. The
+  // event simply keeps its raw stack without resolved frames.
   if (event.type === 'error') {
-    void resolver.resolve(event.stack).then((frames) => {
-      event.frames = frames;
-    });
+    void resolver
+      .resolve(event.stack)
+      .then((frames) => {
+        event.frames = frames;
+      })
+      .catch(() => undefined);
   } else if (event.type === 'network') {
-    void resolver.resolve(event.initiatorStack).then((frames) => {
-      event.initiatorFrames = frames;
-    });
+    void resolver
+      .resolve(event.initiatorStack)
+      .then((frames) => {
+        event.initiatorFrames = frames;
+      })
+      .catch(() => undefined);
   }
 }
 

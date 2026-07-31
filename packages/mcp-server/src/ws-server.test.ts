@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 
-import type { LifecycleEvent, SnapshotResponse } from '@agentlensjs/shared';
+import type { ErrorEvent, LifecycleEvent, SnapshotResponse } from '@agentlensjs/shared';
 import { PROTOCOL_VERSION, WS_PATH, isSnapshotRequest } from '@agentlensjs/shared';
+import type { StackResolver } from './stack-resolver';
 import { EventStore } from './store';
 import { startWsIngestServer, type WsIngestServer } from './ws-server';
 
@@ -187,6 +188,40 @@ describe('ws ingest server security boundary', () => {
       String(call[0]).includes('protocol'),
     );
     expect(versionWarnings).toHaveLength(1);
+  });
+
+  it('survives a stack resolver failure and keeps the event', async () => {
+    const store = new EventStore();
+    // A resolver that rejects (e.g. a corrupt source map) must not surface
+    // as an unhandled rejection — that would kill the daemon process.
+    const failingResolver = {
+      resolve: () => Promise.reject(new Error('corrupt source map')),
+    } as unknown as StackResolver;
+    server = startWsIngestServer(store, port, failingResolver);
+
+    const socket = new WebSocket(wsUrl);
+    sockets.push(socket);
+    await new Promise<void>((resolve, reject) => {
+      socket.on('open', resolve);
+      socket.on('error', reject);
+    });
+    const errorEvent: ErrorEvent = {
+      id: crypto.randomUUID(),
+      type: 'error',
+      timestamp: Date.now(),
+      sessionId: 's1',
+      url: 'http://localhost:5173/',
+      subtype: 'uncaught',
+      message: 'boom',
+      stack: 'Error: boom\n    at fn (http://localhost:5173/src/a.ts:1:1)',
+      frames: [],
+      occurrences: 1,
+    };
+    socket.send(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, events: [errorEvent] }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(store.size).toBe(1);
+    expect(store.query({ type: 'error' })[0]?.type).toBe('error');
   });
 
   it('drops malformed events but keeps valid ones from the same batch', async () => {

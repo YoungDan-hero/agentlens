@@ -86,6 +86,28 @@ describe('redactUrl', () => {
     expect(redactUrl(url)).toBe(url);
     expect(redactUrl('/plain/path')).toBe('/plain/path');
   });
+
+  it('redacts query parameters inside the hash fragment (hash routers)', () => {
+    expect(redactUrl('http://app.test/#/route?token=abc&page=1')).toBe(
+      `http://app.test/#/route?token=${encodeURIComponent(REDACTED)}&page=1`,
+    );
+  });
+
+  it('redacts search and hash queries independently when both are present', () => {
+    // SSO callback landing on a hash-routed page: both segments carry params.
+    expect(redactUrl('http://app.test/callback?code=s3cret&state=1#/route?token=abc')).toBe(
+      `http://app.test/callback?code=s3cret&state=1#/route?token=${encodeURIComponent(REDACTED)}`,
+    );
+    expect(redactUrl('http://app.test/cb?apiKey=k#/route?password=p')).toBe(
+      `http://app.test/cb?apiKey=${encodeURIComponent(REDACTED)}#/route?password=${encodeURIComponent(REDACTED)}`,
+    );
+  });
+
+  it('leaves a hash without query untouched alongside a redacted search', () => {
+    expect(redactUrl('/page?token=abc#top')).toBe(
+      `/page?token=${encodeURIComponent(REDACTED)}#top`,
+    );
+  });
 });
 
 describe('redactBodyText', () => {

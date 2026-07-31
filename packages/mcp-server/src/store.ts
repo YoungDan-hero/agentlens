@@ -79,6 +79,15 @@ export class EventStore {
         // session-scoped queries and health summaries.
         existing.sessionId = event.sessionId;
         existing.url = event.url;
+        // Re-insert at the newest position: `query` returns events in array
+        // order (newest first), so a still-recurring error must not stay
+        // buried at its first-occurrence slot where newer events would push
+        // it out of the default query window.
+        const index = this.events.indexOf(existing);
+        if (index !== -1) {
+          this.events.splice(index, 1);
+          this.events.push(existing);
+        }
         return existing;
       }
       // Expose the identity so agents can reference this error in verify_fix.

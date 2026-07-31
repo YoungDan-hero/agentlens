@@ -40,19 +40,13 @@ export function isSensitiveKey(key: string): boolean {
   return extraKeyNeedles.some((needle) => lower.includes(needle));
 }
 
-/**
- * Replaces the values of sensitive query parameters with `[REDACTED]`,
- * preserving the rest of the URL byte-for-byte (including relative form
- * and hash) when nothing matches.
- */
-export function redactUrl(url: string): string {
-  const queryStart = url.indexOf('?');
+/** Redacts sensitive parameters in one query-carrying segment (`...?a=b&c=d`). */
+function redactQuerySegment(segment: string): string {
+  const queryStart = segment.indexOf('?');
   if (queryStart === -1) {
-    return url;
+    return segment;
   }
-  const hashStart = url.indexOf('#', queryStart);
-  const query = hashStart === -1 ? url.slice(queryStart + 1) : url.slice(queryStart + 1, hashStart);
-  const params = new URLSearchParams(query);
+  const params = new URLSearchParams(segment.slice(queryStart + 1));
   let changed = false;
   for (const key of [...params.keys()]) {
     if (isSensitiveKey(key)) {
@@ -60,11 +54,23 @@ export function redactUrl(url: string): string {
       changed = true;
     }
   }
-  if (!changed) {
-    return url;
+  return changed ? `${segment.slice(0, queryStart + 1)}${params.toString()}` : segment;
+}
+
+/**
+ * Replaces the values of sensitive query parameters with `[REDACTED]`,
+ * preserving the rest of the URL byte-for-byte (including relative form)
+ * when nothing matches. The search part and the hash fragment are redacted
+ * independently: hash routers carry their own query (`#/route?token=...`),
+ * which can coexist with a real search query (e.g. an SSO callback landing
+ * on a hash-routed page).
+ */
+export function redactUrl(url: string): string {
+  const hashStart = url.indexOf('#');
+  if (hashStart === -1) {
+    return redactQuerySegment(url);
   }
-  const suffix = hashStart === -1 ? '' : url.slice(hashStart);
-  return `${url.slice(0, queryStart + 1)}${params.toString()}${suffix}`;
+  return redactQuerySegment(url.slice(0, hashStart)) + redactQuerySegment(url.slice(hashStart));
 }
 
 const MAX_REDACT_DEPTH = 32;

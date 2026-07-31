@@ -191,31 +191,3 @@ export function isSnapshotResponse(value: unknown): value is SnapshotResponse {
     (candidate.root === null || typeof candidate.root === 'object')
   );
 }
-
-const EVENT_TYPES: readonly AgentLensEventType[] = [
-  'error',
-  'console',
-  'network',
-  'lifecycle',
-  'interaction',
-  'performance',
-];
-
-function isEventType(value: unknown): value is AgentLensEventType {
-  return typeof value === 'string' && (EVENT_TYPES as readonly string[]).includes(value);
-}
-
-/** Runtime type guard validating data received at the daemon boundary. */
-export function isAgentLensEvent(value: unknown): value is AgentLensEvent {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-  const candidate = value as Partial<BaseEvent>;
-  return (
-    typeof candidate.id === 'string' &&
-    typeof candidate.timestamp === 'number' &&
-    typeof candidate.sessionId === 'string' &&
-    typeof candidate.url === 'string' &&
-    isEventType(candidate.type)
-  );
-}
