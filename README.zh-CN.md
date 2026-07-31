@@ -125,6 +125,51 @@ daemon 随 Agent 自动启动，在 `ws://localhost:8631` 监听浏览器连接�
 pnpm build && pnpm --filter react-demo e2e
 ```
 
+### 非 Vite 项目：手动接入
+
+Vite 插件只是便利层，不是必需品。采集 SDK 是纯浏览器代码——Webpack、Next.js、基于 Webpack 的 Nuxt 等任何工具链，都可以直接安装并在客户端入口手动初始化：
+
+```bash
+npm install -D @agentlensjs/runtime
+```
+
+```ts
+// 客户端入口（如 src/main.tsx）—— 仅开发模式
+if (process.env.NODE_ENV === 'development') {
+  void import('@agentlensjs/runtime').then(({ init }) => {
+    init();
+  });
+}
+```
+
+环境判断 + 动态 import 保证 SDK 完全不会进入生产构建。`init` 支持的选项：
+
+```ts
+init({
+  endpoint: 'ws://localhost:8631/agentlens', // 如修改过 AGENTLENS_PORT，保持一致
+  captureBodies: false, // 显式开启后才捕获请求/响应体（自动脱敏）
+});
+```
+
+手动接入模式下，上述全部能力可用——错误、控制台、网络、性能、交互、布局快照，以及全部七个 MCP 工具——只有两处降级：
+
+- **源码归因** —— `data-agentlens-source` 由 Vite 插件的 JSX 转换注入，没有插件时，交互与布局盒子只能用 tag / id / class 描述元素，无法给出 `文件:行号`。
+- **`verify_fix`** —— daemon 接受 HMR 信号或整页刷新两种"新代码已到达浏览器"的证据。刷新开箱即用；想走更快的 HMR 路径，把构建工具的热更新 API 接到 `reportHmrUpdate` 即可：
+
+```ts
+// webpack 5 —— 可选，不接也能靠整页刷新工作
+if (process.env.NODE_ENV === 'development') {
+  void import('@agentlensjs/runtime').then(({ init }) => {
+    const client = init();
+    import.meta.webpackHot?.addStatusHandler((status) => {
+      if (status === 'idle') client.reportHmrUpdate();
+    });
+  });
+}
+```
+
+Next.js 项目需保证代码只在客户端执行——放在 [`instrumentation-client.ts`](https://nextjs.org/docs/app/api-reference/file-conventions/instrumentation-client)（Next 15.3+）或挂载在根布局的 `'use client'` 组件里。
+
 ### MCP 工具详细说明
 
 **`get_page_health`** —— 建议 Agent 首先调用的工具。返回最近 5 分钟内的健康概览：去重后的错误数、含折叠重复的错误总次数、失败请求数、最近活动时间。默认作用于最近活跃的会话，可传 `sessionId` 指定。
@@ -174,11 +219,22 @@ AgentLens 是开发期工具，从设计上保证敏感数据不出本机：
 - **URL 默认脱敏** —— 每个网络事件的 `?token=...`、`?apiKey=...` 等敏感查询参数值一律擦除。
 - **表单值永不采集** —— 交互事件只记录元素本身，不记录用户输入的内容。
 
+## 设计决策
+
+### 有意不做持久化
+
+daemon 将事件保存在有界内存缓冲区中，重启即清空全部历史。这是刻意的取舍，不是待补的功能：
+
+- **过期的运行时数据比没有数据更糟。** 事件描述的是采集那一刻的代码。daemon 重启后代码通常已经变了——行号漂移、source map 重新生成——恢复出来的旧错误会把 Agent 指向已经不存在的代码。对修复闭环来说，误导性的历史严格劣于空缓冲区。
+- **重启不会发生在会话中途。** daemon 与 MCP 客户端（Cursor、Claude Code）同生共死，它不是需要崩溃恢复的常驻服务。
+- **纯内存本身就是隐私保证。** 任何数据都不落盘，进程一死信号即消失。一旦持久化，就要处理包含请求数据的文件的权限、保留期与清理策略——为可忽略的收益付出真实的成本。
+- **AgentLens 是反馈回路，不是 APM。** 跨会话的错误历史是监控产品（Sentry 之类）的职责。保持 daemon 无状态，才能保持定位清晰。
+
 ## 已知限制
 
-- **仅支持 Vite** —— runtime 通过 `@agentlensjs/vite-plugin` 注入，暂不支持其他构建工具。
+- **一等公民插件仅支持 Vite** —— 其他构建工具可用[手动接入](#非-vite-项目手动接入)：信号与工具全部保留，仅损失 `文件:行号` 源码归因。
 - **不记录 WebSocket 消息帧** —— 连接的建立与失败会被捕获，消息内容不会。
-- **内存存储** —— daemon 将事件保存在有界内存缓冲区中，重启即清空。作为开发期工具，这是有意的设计。
+- **内存存储** —— daemon 重启即清空历史，原因见[设计决策](#设计决策)。
 - **不遍历 iframe / shadow DOM** —— 布局快照仅覆盖顶层文档。
 
 ## 许可证

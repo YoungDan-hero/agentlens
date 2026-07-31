@@ -16,4 +16,22 @@ Privacy by design: request headers are never collected; sensitive URL query para
 
 Development-only by design: it is injected by `@agentlensjs/vite-plugin` in `serve` mode and adds zero overhead to production builds.
 
+## Standalone usage (non-Vite projects)
+
+On Webpack, Next.js or any other toolchain, initialize the SDK manually in your client entry:
+
+```ts
+// client entry — dev only; the dynamic import keeps production bundles clean
+if (process.env.NODE_ENV === 'development') {
+  void import('@agentlensjs/runtime').then(({ init }) => {
+    init({
+      // endpoint: 'ws://localhost:8631/agentlens', // match AGENTLENS_PORT if changed
+      // captureBodies: false, // opt in to request/response bodies (redacted)
+    });
+  });
+}
+```
+
+All signals and MCP tools work in this mode. Two degradations compared to the Vite plugin: no `file:line` source attribution (elements are described by tag / id / class), and `verify_fix` relies on full page reloads unless you wire your bundler's HMR API to the returned client's `reportHmrUpdate()`.
+
 See the [AgentLens monorepo](https://github.com/YoungDan-hero/agentlens) for full documentation.

@@ -125,6 +125,51 @@ A ready-to-run example lives in [`examples/react-demo`](./examples/react-demo), 
 pnpm build && pnpm --filter react-demo e2e
 ```
 
+### Using without Vite
+
+The Vite plugin is a convenience, not a requirement. The collector SDK is plain browser code — on any other toolchain (Webpack, Next.js, Nuxt with Webpack, ...), install it directly and initialize it in your client entry module:
+
+```bash
+npm install -D @agentlensjs/runtime
+```
+
+```ts
+// client entry (e.g. src/main.tsx) — dev only
+if (process.env.NODE_ENV === 'development') {
+  void import('@agentlensjs/runtime').then(({ init }) => {
+    init();
+  });
+}
+```
+
+The dynamic import behind the env check keeps the SDK out of production bundles entirely. `init` accepts:
+
+```ts
+init({
+  endpoint: 'ws://localhost:8631/agentlens', // match AGENTLENS_PORT if you changed it
+  captureBodies: false, // opt in to request/response bodies (redacted)
+});
+```
+
+Everything above works with manual setup — errors, console, network, performance, interactions, layout snapshots and all seven MCP tools — with two degradations:
+
+- **Source attribution** — `data-agentlens-source` is stamped by the Vite plugin's JSX transform, so without it, interactions and layout boxes describe elements by tag / id / class instead of `file:line`.
+- **`verify_fix`** — the daemon accepts either an HMR signal or a full page reload as proof that new code reached the browser. Reloads work out of the box; to get the faster HMR path, wire your bundler's hot API to `reportHmrUpdate`:
+
+```ts
+// webpack 5 — optional, reloads work without it
+if (process.env.NODE_ENV === 'development') {
+  void import('@agentlensjs/runtime').then(({ init }) => {
+    const client = init();
+    import.meta.webpackHot?.addStatusHandler((status) => {
+      if (status === 'idle') client.reportHmrUpdate();
+    });
+  });
+}
+```
+
+For Next.js, run the snippet on the client only — e.g. in [`instrumentation-client.ts`](https://nextjs.org/docs/app/api-reference/file-conventions/instrumentation-client) (Next 15.3+) or a `'use client'` component mounted in the root layout.
+
 ## Packages
 
 | Package                                              | Description                                                |
@@ -164,11 +209,22 @@ AgentLens is a dev-time tool designed so that sensitive data cannot leave your m
 - **URLs are redacted by default** — sensitive query parameter values (`?token=...`, `?apiKey=...`) are stripped on every network event.
 - **Form values are never captured** — interaction events record the element, not what was typed into it.
 
+## Design decisions
+
+### No persistence, on purpose
+
+The daemon keeps events in a bounded in-memory buffer; restarting it clears all history. This is a deliberate decision, not a missing feature:
+
+- **Stale runtime data is worse than no data.** Events describe the code as it was at capture time. After a restart the code has usually changed — line numbers drift, source maps are rebuilt — so a restored error would point the agent at code that no longer exists. For a fix loop, misleading history is strictly worse than an empty buffer.
+- **Restarts don't happen mid-session.** The daemon lives and dies with your MCP client (Cursor, Claude Code); it is not a long-running service that needs crash recovery.
+- **Memory-only is a privacy guarantee.** Nothing is ever written to disk; every captured signal disappears with the process. Persisting events would create files containing request data that need permissions, retention and cleanup — a real cost for negligible benefit.
+- **AgentLens is a feedback loop, not an APM.** Cross-session error history is a monitoring product's job (Sentry and friends). Keeping the daemon stateless keeps the scope honest.
+
 ## Known limitations
 
-- **Vite only** — the runtime is injected via `@agentlensjs/vite-plugin`; other bundlers are not supported yet.
+- **First-class plugin is Vite-only** — on other bundlers, use the [manual setup](#using-without-vite); you keep all signals and tools, but lose `file:line` source attribution.
 - **WebSocket frames are not recorded** — connection attempts (open/failure) are captured, message payloads are not.
-- **In-memory store** — the daemon keeps events in a bounded in-memory buffer; restarting the daemon clears history. This is by design for a dev-time tool.
+- **In-memory store** — restarting the daemon clears history; see [Design decisions](#design-decisions) for why this stays.
 - **No iframe / shadow DOM traversal** — layout snapshots cover the top-level document only.
 
 ## License
