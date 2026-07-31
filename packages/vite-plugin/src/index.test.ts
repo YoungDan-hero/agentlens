@@ -79,16 +79,51 @@ describe('agentlens vite plugin', () => {
     expect(result?.code).toContain('data-agentlens-source="src/A.tsx:1"');
   });
 
+  it('injects source attributes into vue sfc templates relative to the vite root', () => {
+    const plugin = agentlens();
+    callHook(plugin.configResolved, { root: '/repo/app' });
+
+    const sfc = '<template>\n  <button>Go</button>\n</template>';
+    const result = callHook(plugin.transform, sfc, '/repo/app/src/App.vue') as
+      { code: string } | undefined;
+    expect(result?.code).toContain('data-agentlens-source="src/App.vue:2"');
+  });
+
+  it('handles vue main requests with a timestamp query but skips sub-requests', () => {
+    const plugin = agentlens();
+    callHook(plugin.configResolved, { root: '/repo/app' });
+    const sfc = '<template>\n  <button>Go</button>\n</template>';
+
+    // HMR reloads append ?t=...; that is still the full SFC.
+    const hmr = callHook(plugin.transform, sfc, '/repo/app/src/App.vue?t=123') as
+      { code: string } | undefined;
+    expect(hmr?.code).toContain('data-agentlens-source');
+
+    // ?vue&type=... sub-requests carry compiled fragments, never the SFC.
+    expect(
+      callHook(plugin.transform, sfc, '/repo/app/src/App.vue?vue&type=style&index=0'),
+    ).toBeUndefined();
+
+    // Asset requests wrap the file in a JS module; injecting a quoted
+    // attribute into the string literal would break the module syntax.
+    const rawModule = 'export default "<template>\\n  <button>Go</button>\\n</template>"';
+    expect(callHook(plugin.transform, rawModule, '/repo/app/src/App.vue?raw')).toBeUndefined();
+    expect(callHook(plugin.transform, rawModule, '/repo/app/src/App.vue?url')).toBeUndefined();
+  });
+
   it('ignores non-jsx files, node_modules and disabled mode', () => {
     const plugin = agentlens();
     callHook(plugin.configResolved, { root: '/repo/app' });
     const jsx = 'export const A = () => <div />;';
+    const sfc = '<template><button>Go</button></template>';
 
     expect(callHook(plugin.transform, 'const n = 1;', '/repo/app/src/n.ts')).toBeUndefined();
     expect(callHook(plugin.transform, jsx, '/repo/app/node_modules/lib/x.tsx')).toBeUndefined();
+    expect(callHook(plugin.transform, sfc, '/repo/app/node_modules/lib/C.vue')).toBeUndefined();
 
     const disabled = agentlens({ enabled: false });
     callHook(disabled.configResolved, { root: '/repo/app' });
     expect(callHook(disabled.transform, jsx, '/repo/app/src/A.tsx')).toBeUndefined();
+    expect(callHook(disabled.transform, sfc, '/repo/app/src/App.vue')).toBeUndefined();
   });
 });

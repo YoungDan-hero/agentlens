@@ -36,7 +36,7 @@ AI 编程助手能写前端代码，却看不见浏览器里发生了什么。�
 
 - **错误去重折叠** —— 相同错误折叠为一条记录并累计出现次数，渲染循环里的错误风暴不会把有用信号冲出缓冲区
 - **会话隔离** —— 每次页面加载 / 每个标签页是独立会话，查询默认作用于最近活跃的会话
-- **源码归因** —— Vite 插件为 JSX 元素注入 `data-agentlens-source="文件:行号"`，DOM 节点、点击事件、布局盒子都能追溯到代码
+- **源码归因** —— Vite 插件为 Vue SFC 模板元素与 JSX 宿主元素注入 `data-agentlens-source="文件:行号"`，DOM 节点、点击事件、布局盒子都能追溯到代码
 
 **面向 Agent 的七个 MCP 工具**：
 
@@ -52,7 +52,7 @@ AI 编程助手能写前端代码，却看不见浏览器里发生了什么。�
 
 ## 实际运用场景
 
-- **自主调试闭环** —— Agent 改完代码后调用 `get_page_health`，发现一个新错误，source map 还原的堆栈直指 `src/App.tsx:42`；Agent 修复后调用 `verify_fix` 确认错误不再复发——全程不需要你打开 DevTools 粘贴任何东西。
+- **自主调试闭环** —— Agent 改完代码后调用 `get_page_health`，发现一个新错误，source map 还原的堆栈直指 `src/App.vue:42`；Agent 修复后调用 `verify_fix` 确认错误不再复发——全程不需要你打开 DevTools 粘贴任何东西。
 - **"我改完就坏了"** —— `get_interaction_timeline` 把"点击了提交按钮 → 触发了一个 500 请求 → 随后抛出未处理 rejection"作为一个因果组呈现，Agent 直接看到事故链条。
 - **布局与样式问题** —— `get_layout_snapshot` 给 Agent 一棵结构化的盒子树：每个元素的位置、尺寸、可见性、是否溢出、直接文本，以及渲染它的源码行。"侧边栏溢出了"从一句模糊描述变成可定位的事实。
 - **性能回归** —— `get_performance` 返回当前的 Web Vitals 评级与长任务压力，"页面感觉很卡"变成"INP 620ms（poor），14 个长任务共 2.1 秒"。
@@ -68,16 +68,28 @@ pnpm add -D @agentlensjs/vite-plugin
 ```
 
 ```ts
-// vite.config.ts
+// vite.config.ts —— Vue 项目
 import { defineConfig } from 'vite';
+import vue from '@vitejs/plugin-vue';
 import { agentlens } from '@agentlensjs/vite-plugin';
 
 export default defineConfig({
-  plugins: [agentlens()],
+  plugins: [vue(), agentlens()],
 });
 ```
 
-插件只在 `serve`（开发服务器）模式下生效，生产构建完全不受影响。可选配置：
+```ts
+// vite.config.ts —— React 项目
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { agentlens } from '@agentlensjs/vite-plugin';
+
+export default defineConfig({
+  plugins: [react(), agentlens()],
+});
+```
+
+源码归因对两个生态都生效：Vue SFC 模板（`.vue`）与 JSX/TSX 宿主元素都会自动打上 `data-agentlens-source="文件:行号"`。插件只在 `serve`（开发服务器）模式下生效，生产构建完全不受影响。可选配置：
 
 ```ts
 agentlens({
@@ -120,10 +132,10 @@ daemon 随 Agent 自动启动，在 `ws://localhost:8631` 监听浏览器连接�
 - _"页面上有什么元素溢出了吗？"_
 - _"我已经修复了，验证一下那个错误是不是没了。"_
 
-完整可运行的示例在 [`examples/react-demo`](./examples/react-demo)，包含自动化端到端验证：
+完整可运行的示例在 [`examples/vue-demo`](./examples/vue-demo) 与 [`examples/react-demo`](./examples/react-demo)，均包含自动化端到端验证：
 
 ```bash
-pnpm build && pnpm --filter react-demo e2e
+pnpm build && pnpm --filter vue-demo e2e
 ```
 
 ### 非 Vite 项目：手动接入
@@ -157,7 +169,7 @@ init({
 
 手动接入模式下，上述全部能力可用——错误、控制台、网络、性能、交互、布局快照，以及全部七个 MCP 工具——只有两处降级：
 
-- **源码归因** —— `data-agentlens-source` 由 Vite 插件的 JSX 转换注入，没有插件时，交互与布局盒子只能用 tag / id / class 描述元素，无法给出 `文件:行号`。
+- **源码归因** —— `data-agentlens-source` 由 Vite 插件的模板/JSX 转换注入，没有插件时，交互与布局盒子只能用 tag / id / class 描述元素，无法给出 `文件:行号`。
 - **`verify_fix`** —— daemon 接受 HMR 信号或整页刷新两种"新代码已到达浏览器"的证据。刷新开箱即用；想走更快的 HMR 路径，把构建工具的热更新 API 接到 `reportHmrUpdate` 即可：
 
 ```ts
@@ -192,12 +204,12 @@ Next.js 项目需保证代码只在客户端执行——放在 [`instrumentation
 
 ## 包结构
 
-| 包                                                   | 说明                                   |
-| ---------------------------------------------------- | -------------------------------------- |
-| [`@agentlensjs/vite-plugin`](./packages/vite-plugin) | 注入 runtime 并为 JSX 打上源码归因属性 |
-| [`@agentlensjs/runtime`](./packages/runtime)         | 浏览器内的信号采集 SDK                 |
-| [`@agentlensjs/mcp-server`](./packages/mcp-server)   | daemon：事件存储、堆栈还原、MCP 工具   |
-| [`@agentlensjs/shared`](./packages/shared)           | 线上协议与共享类型定义                 |
+| 包                                                   | 说明                                             |
+| ---------------------------------------------------- | ------------------------------------------------ |
+| [`@agentlensjs/vite-plugin`](./packages/vite-plugin) | 注入 runtime，为 Vue 模板与 JSX 打上源码归因属性 |
+| [`@agentlensjs/runtime`](./packages/runtime)         | 浏览器内的信号采集 SDK                           |
+| [`@agentlensjs/mcp-server`](./packages/mcp-server)   | daemon：事件存储、堆栈还原、MCP 工具             |
+| [`@agentlensjs/shared`](./packages/shared)           | 线上协议与共享类型定义                           |
 
 ## 本地开发
 

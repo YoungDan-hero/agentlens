@@ -81,7 +81,10 @@ jobs:
       - name: Build packages
         run: pnpm build
 
-      - name: Run E2E (Vite plugin chain)
+      - name: Run E2E (Vue SFC chain)
+        run: pnpm --filter vue-demo e2e
+
+      - name: Run E2E (React JSX chain)
         run: pnpm --filter react-demo e2e
 
       - name: Run E2E (manual webpack integration)

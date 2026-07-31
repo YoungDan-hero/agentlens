@@ -5,12 +5,24 @@ Vite plugin that wires AgentLens into your app during development. It injects th
 ## Usage
 
 ```ts
-// vite.config.ts
+// vite.config.ts — Vue
 import { defineConfig } from 'vite';
+import vue from '@vitejs/plugin-vue';
 import { agentlens } from '@agentlensjs/vite-plugin';
 
 export default defineConfig({
-  plugins: [agentlens()],
+  plugins: [vue(), agentlens()],
+});
+```
+
+```ts
+// vite.config.ts — React
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { agentlens } from '@agentlensjs/vite-plugin';
+
+export default defineConfig({
+  plugins: [react(), agentlens()],
 });
 ```
 
@@ -28,7 +40,7 @@ agentlens({
 ## What it does in dev mode
 
 - **Runtime injection** — loads the `@agentlensjs/runtime` collector via a virtual module and reports HMR updates so the daemon's `verify_fix` tool can close the loop.
-- **Source attribution** — tags every host element in your JSX with `data-agentlens-source="src/App.tsx:42"`, so any DOM node can be traced back to the exact file and line that rendered it. Component tags are left untouched.
+- **Source attribution** — tags every native element in Vue SFC templates (`data-agentlens-source="src/App.vue:42"`) and every host element in JSX (`src/App.tsx:42`), so any DOM node can be traced back to the exact file and line that rendered it. Component tags are left untouched — an attribute there would become a prop instead of landing on a DOM node.
 
 Both apply only to the dev server; production builds are unaffected.
 

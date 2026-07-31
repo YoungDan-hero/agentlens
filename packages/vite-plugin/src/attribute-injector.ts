@@ -1,6 +1,9 @@
 import { SOURCE_ATTRIBUTE } from '@agentlensjs/shared';
 import { parse } from '@babel/parser';
-import MagicString from 'magic-string';
+// Named import on purpose: magic-string is ESM-only, and the default-import
+// CJS interop tsup emits (`__toESM(require(...), 1).default`) yields the
+// module namespace instead of the constructor, crashing `require()` users.
+import { MagicString } from 'magic-string';
 
 export interface InjectResult {
   code: string;

@@ -35,6 +35,7 @@
     "@agentlensjs/runtime": "workspace:*",
     "@agentlensjs/shared": "workspace:*",
     "@babel/parser": "^8.0.4",
+    "@vue/compiler-dom": "^3.5.40",
     "magic-string": "^1.1.0"
   },
   "peerDependencies": {

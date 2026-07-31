@@ -2,9 +2,11 @@ import { DEFAULT_WS_PORT, WS_PATH } from '@agentlensjs/shared';
 import type { Plugin } from 'vite';
 
 import { injectSourceAttributes } from './attribute-injector';
+import { injectVueSourceAttributes } from './vue-injector';
 
 export { SOURCE_ATTRIBUTE } from '@agentlensjs/shared';
 export { injectSourceAttributes } from './attribute-injector';
+export { injectVueSourceAttributes } from './vue-injector';
 
 export interface AgentLensPluginOptions {
   /**
@@ -51,7 +53,8 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
   return {
     name: 'agentlens',
     apply: 'serve',
-    // Must transform JSX before the framework plugin compiles it away.
+    // Must transform templates (Vue SFC) and JSX before the framework
+    // plugin compiles them away.
     enforce: 'pre',
 
     configResolved(config) {
@@ -62,13 +65,28 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
       if (!enabled) {
         return undefined;
       }
-      const [file = ''] = id.split('?');
-      if (!/\.[jt]sx$/.test(file) || file.includes('/node_modules/')) {
+      const [file = '', rawQuery = ''] = id.split('?', 2);
+      if (file.includes('/node_modules/')) {
         return undefined;
       }
       const normalizedRoot = root.endsWith('/') ? root : `${root}/`;
       const fileName = file.startsWith(normalizedRoot) ? file.slice(normalizedRoot.length) : file;
-      const result = injectSourceAttributes(code, fileName);
+
+      let result: ReturnType<typeof injectSourceAttributes> = null;
+      if (file.endsWith('.vue')) {
+        // Only the plain module request carries the parseable SFC.
+        // Sub-requests (?vue&type=...) hold compiled fragments; asset
+        // requests (?raw / ?url / ?worker) hold a JS wrapper whose string
+        // literal an HTML parser would corrupt.
+        const query = new URLSearchParams(rawQuery);
+        const isMainSfcRequest =
+          !query.has('vue') && !query.has('raw') && !query.has('url') && !query.has('worker');
+        if (isMainSfcRequest) {
+          result = injectVueSourceAttributes(code, fileName);
+        }
+      } else if (/\.[jt]sx$/.test(file)) {
+        result = injectSourceAttributes(code, fileName);
+      }
       if (!result) {
         return undefined;
       }

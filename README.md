@@ -36,7 +36,7 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 
 - **Error deduplication** — identical errors fold into one record with an occurrence counter, so a render-loop error storm cannot flush useful signals out of the buffer
 - **Session isolation** — every page load / tab is a separate session; queries scope to the most recently active one by default
-- **Source attribution** — the Vite plugin stamps JSX elements with `data-agentlens-source="file:line"`, so DOM nodes, clicks and layout boxes all trace back to code
+- **Source attribution** — the Vite plugin stamps Vue SFC template elements and JSX host elements with `data-agentlens-source="file:line"`, so DOM nodes, clicks and layout boxes all trace back to code
 
 **Seven MCP tools** for the agent:
 
@@ -52,7 +52,7 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 
 ## Use cases
 
-- **Autonomous debugging** — the agent edits code, checks `get_page_health`, sees a new error with a source-mapped stack pointing at `src/App.tsx:42`, fixes it, and confirms with `verify_fix` — without you touching DevTools.
+- **Autonomous debugging** — the agent edits code, checks `get_page_health`, sees a new error with a source-mapped stack pointing at `src/App.vue:42`, fixes it, and confirms with `verify_fix` — without you touching DevTools.
 - **"It's broken after my change"** — `get_interaction_timeline` shows the click on the submit button, the 500 response it triggered, and the unhandled rejection that followed, as one causal group.
 - **Layout and styling issues** — `get_layout_snapshot` gives the agent a structured view of every box (position, size, visibility, overflow, text) with the source line that rendered it, so "the sidebar overflows" becomes an addressable fact instead of a guess.
 - **Performance regressions** — `get_performance` reports the current Web Vitals with their web.dev ratings and the long-task pressure, so "the page feels slow" turns into "INP is 620 ms (poor) and there are 14 long tasks totalling 2.1 s".
@@ -68,16 +68,28 @@ pnpm add -D @agentlensjs/vite-plugin
 ```
 
 ```ts
-// vite.config.ts
+// vite.config.ts — Vue
 import { defineConfig } from 'vite';
+import vue from '@vitejs/plugin-vue';
 import { agentlens } from '@agentlensjs/vite-plugin';
 
 export default defineConfig({
-  plugins: [agentlens()],
+  plugins: [vue(), agentlens()],
 });
 ```
 
-The plugin only applies in `serve` mode — production builds are untouched. Options:
+```ts
+// vite.config.ts — React
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { agentlens } from '@agentlensjs/vite-plugin';
+
+export default defineConfig({
+  plugins: [react(), agentlens()],
+});
+```
+
+Source attribution covers both ecosystems: Vue SFC templates (`.vue`) and JSX/TSX host elements get `data-agentlens-source="file:line"` stamps automatically. The plugin only applies in `serve` mode — production builds are untouched. Options:
 
 ```ts
 agentlens({
@@ -120,10 +132,10 @@ Run `npm run dev` (your project's Vite dev-server script) and open the page. The
 - _"Is anything overflowing on the page?"_
 - _"I pushed a fix — verify that the error is gone."_
 
-A ready-to-run example lives in [`examples/react-demo`](./examples/react-demo), including an automated end-to-end check:
+Ready-to-run examples live in [`examples/vue-demo`](./examples/vue-demo) and [`examples/react-demo`](./examples/react-demo), each with an automated end-to-end check:
 
 ```bash
-pnpm build && pnpm --filter react-demo e2e
+pnpm build && pnpm --filter vue-demo e2e
 ```
 
 ### Using without Vite
@@ -157,7 +169,7 @@ One caveat inherent to this pattern: collectors only exist once the dynamically 
 
 Everything above works with manual setup — errors, console, network, performance, interactions, layout snapshots and all seven MCP tools — with two degradations:
 
-- **Source attribution** — `data-agentlens-source` is stamped by the Vite plugin's JSX transform, so without it, interactions and layout boxes describe elements by tag / id / class instead of `file:line`.
+- **Source attribution** — `data-agentlens-source` is stamped by the Vite plugin's template/JSX transform, so without it, interactions and layout boxes describe elements by tag / id / class instead of `file:line`.
 - **`verify_fix`** — the daemon accepts either an HMR signal or a full page reload as proof that new code reached the browser. Reloads work out of the box; to get the faster HMR path, wire your bundler's hot API to `reportHmrUpdate`:
 
 ```ts
@@ -176,12 +188,12 @@ For Next.js, run the snippet on the client only — e.g. in [`instrumentation-cl
 
 ## Packages
 
-| Package                                              | Description                                                |
-| ---------------------------------------------------- | ---------------------------------------------------------- |
-| [`@agentlensjs/vite-plugin`](./packages/vite-plugin) | Injects the runtime and stamps JSX with source attribution |
-| [`@agentlensjs/runtime`](./packages/runtime)         | In-browser collector SDK                                   |
-| [`@agentlensjs/mcp-server`](./packages/mcp-server)   | Daemon: event store, stack resolution, MCP tools           |
-| [`@agentlensjs/shared`](./packages/shared)           | Wire protocol and shared type definitions                  |
+| Package                                              | Description                                                               |
+| ---------------------------------------------------- | ------------------------------------------------------------------------- |
+| [`@agentlensjs/vite-plugin`](./packages/vite-plugin) | Injects the runtime; stamps Vue templates and JSX with source attribution |
+| [`@agentlensjs/runtime`](./packages/runtime)         | In-browser collector SDK                                                  |
+| [`@agentlensjs/mcp-server`](./packages/mcp-server)   | Daemon: event store, stack resolution, MCP tools                          |
+| [`@agentlensjs/shared`](./packages/shared)           | Wire protocol and shared type definitions                                 |
 
 ## Development
 
@@ -202,6 +214,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow.
 - [x] M1 — error / console / network capture, source-mapped stack attribution, `get_page_health`, `get_recent_events`, E2E-verified chain
 - [x] M2 — structured layout snapshots, `data-source` attribution, `verify_fix`
 - [x] M3 — interaction timeline (cause-and-effect grouping of user actions and their effects)
+- [x] M4 — first-class Vue support: SFC template source attribution, Vue demo in the E2E matrix
 
 ## Privacy & data safety
 
