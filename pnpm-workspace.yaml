@@ -6,3 +6,10 @@ packages:
 allowBuilds:
   esbuild: true
   simple-git-hooks: true
+
+# Security floor: GHSA advisory (arbitrary file read via esbuild's dev server
+# on Windows) is fixed in 0.28.1, but tsup/vite/webpack still declare <0.28
+# ranges. We never use esbuild's own serve mode, so this is belt-and-braces;
+# remove once parents catch up.
+overrides:
+  esbuild: '>=0.28.1'
