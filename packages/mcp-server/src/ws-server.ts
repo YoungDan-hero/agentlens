@@ -1,10 +1,23 @@
-import { isActionResult, isSnapshotResponse, PROTOCOL_VERSION, WS_PATH } from '@agentlensjs/shared';
+import {
+  isActionResult,
+  isActionSequenceResult,
+  isFocusUpdate,
+  isSnapshotResponse,
+  isSourceQueryResponse,
+  PROTOCOL_VERSION,
+  WS_PATH,
+} from '@agentlensjs/shared';
 import type {
   ActionRequest,
   ActionResult,
+  ActionSequenceRequest,
+  ActionSequenceResult,
+  ActionStep,
   AgentLensEvent,
   SnapshotRequest,
   SnapshotResponse,
+  SourceQueryRequest,
+  SourceQueryResponse,
 } from '@agentlensjs/shared';
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
@@ -26,7 +39,25 @@ const BIND_MAX_RETRIES = 10;
 /** An action request minus the envelope fields the server fills in. */
 export type ActionCommand = Omit<ActionRequest, 'kind' | 'requestId'>;
 
+/** Live focus/visibility state of one connected browser session. */
+export interface SessionFocusInfo {
+  sessionId: string;
+  /** Null when the runtime has not reported focus state (older runtime). */
+  visible: boolean | null;
+  focused: boolean | null;
+  /**
+   * URL from the latest focus report — fresher than the store's per-event
+   * URL after SPA route changes that emit no events. Null until reported.
+   */
+  url: string | null;
+}
+
 export interface WsIngestServer {
+  /**
+   * Focus/visibility state of every currently connected session, so agents
+   * can tell which page the user is actually looking at.
+   */
+  sessionFocus: () => SessionFocusInfo[];
   /**
    * Asks a connected browser session for a structured layout snapshot.
    * Targets the given session when provided, otherwise the most recently
@@ -46,6 +77,25 @@ export interface WsIngestServer {
     sessionId?: string,
     timeoutMs?: number,
   ) => Promise<ActionResult>;
+  /**
+   * Asks a connected browser session to run several actions in order.
+   * The runtime stops at the first failure (or when the user takes over)
+   * and reports the break point; same refusal semantics as requestAction.
+   */
+  requestActionSequence: (
+    steps: ActionStep[],
+    sessionId?: string,
+    timeoutMs?: number,
+  ) => Promise<ActionSequenceResult>;
+  /**
+   * Asks a connected browser session which elements a source file renders
+   * right now — the reverse direction of source attribution.
+   */
+  requestSourceQuery: (
+    source: string,
+    sessionId?: string,
+    timeoutMs?: number,
+  ) => Promise<SourceQueryResponse>;
   close: () => Promise<void>;
 }
 
@@ -66,9 +116,31 @@ export interface WsIngestServerOptions {
 interface ConnectionInfo {
   sessionId: string | null;
   lastActivityAt: number;
+  /** Null until the runtime sends its first focus-update (older runtimes never do). */
+  visible: boolean | null;
+  focused: boolean | null;
+  lastFocusAt: number;
+  /** URL carried by the latest focus-update. */
+  url: string | null;
   /** Diagnostics are logged once per connection to avoid stderr storms. */
   warnedVersionMismatch: boolean;
   warnedMalformedEvents: boolean;
+}
+
+/**
+ * Ranks a connection by how likely it is to be the page in front of the
+ * user: focused & visible beats merely visible, which beats connections
+ * with unknown focus state (old runtimes), which beats known-background
+ * tabs. Ties are broken by recency in pickSocket.
+ */
+function focusRank(info: ConnectionInfo): number {
+  if (info.visible === null) {
+    return 1;
+  }
+  if (!info.visible) {
+    return 0;
+  }
+  return info.focused === true ? 3 : 2;
 }
 
 /** Envelope shape check; individual events are validated separately. */
@@ -131,15 +203,27 @@ export function startWsIngestServer(
   const allowedOrigins = options.allowedOrigins ?? [];
   const rejectedOrigins = new Set<string>();
 
+  interface Pending<T> {
+    resolve: (value: T) => void;
+    /** Kept so close() can settle in-flight requests instead of leaving them hanging. */
+    reject: (error: Error) => void;
+    timer: NodeJS.Timeout;
+  }
+
   const connections = new Map<WebSocket, ConnectionInfo>();
-  const pendingSnapshots = new Map<
-    string,
-    { resolve: (response: SnapshotResponse) => void; timer: NodeJS.Timeout }
-  >();
-  const pendingActions = new Map<
-    string,
-    { resolve: (result: ActionResult) => void; timer: NodeJS.Timeout }
-  >();
+  const pendingSnapshots = new Map<string, Pending<SnapshotResponse>>();
+  const pendingActions = new Map<string, Pending<ActionResult>>();
+  const pendingSourceQueries = new Map<string, Pending<SourceQueryResponse>>();
+  const pendingSequences = new Map<string, Pending<ActionSequenceResult>>();
+
+  /** Rejects and clears every in-flight request of one kind. */
+  function drainPending<T>(pending: Map<string, Pending<T>>): void {
+    for (const entry of pending.values()) {
+      clearTimeout(entry.timer);
+      entry.reject(new Error('The AgentLens daemon is shutting down.'));
+    }
+    pending.clear();
+  }
 
   let wss: WebSocketServer;
   let bindAttempts = 0;
@@ -150,6 +234,10 @@ export function startWsIngestServer(
     connections.set(socket, {
       sessionId: null,
       lastActivityAt: Date.now(),
+      visible: null,
+      focused: null,
+      lastFocusAt: 0,
+      url: null,
       warnedVersionMismatch: false,
       warnedMalformedEvents: false,
     });
@@ -182,6 +270,42 @@ export function startWsIngestServer(
           pendingActions.delete(message.requestId);
           clearTimeout(pending.timer);
           pending.resolve(message);
+        }
+        return;
+      }
+
+      if (isActionSequenceResult(message)) {
+        const pending = pendingSequences.get(message.requestId);
+        if (pending) {
+          pendingSequences.delete(message.requestId);
+          clearTimeout(pending.timer);
+          pending.resolve(message);
+        }
+        return;
+      }
+
+      if (isSourceQueryResponse(message)) {
+        const pending = pendingSourceQueries.get(message.requestId);
+        if (pending) {
+          pendingSourceQueries.delete(message.requestId);
+          clearTimeout(pending.timer);
+          pending.resolve(message);
+        }
+        return;
+      }
+
+      if (isFocusUpdate(message)) {
+        const info = connections.get(socket);
+        if (info) {
+          // Binds the session id early too: focus updates arrive right after
+          // connect, before the first event batch.
+          info.sessionId = message.sessionId;
+          info.visible = message.visible;
+          info.focused = message.focused;
+          info.url = message.url;
+          if (message.focused) {
+            info.lastFocusAt = message.at;
+          }
         }
         return;
       }
@@ -241,6 +365,11 @@ export function startWsIngestServer(
       host: '127.0.0.1',
       port,
       path: WS_PATH,
+      // Memory guard at the trust boundary: schema validation caps field
+      // *shapes* but not message size. Runtime batches and snapshot
+      // responses stay well under this; a hostile page cannot buffer
+      // gigabytes into the daemon.
+      maxPayload: 5 * 1024 * 1024,
       // Loopback binding does not stop pages: any website in the user's
       // browser can attempt a WebSocket handshake to 127.0.0.1. The Origin
       // header is browser-controlled and unforgeable, so gate on it.
@@ -304,7 +433,8 @@ export function startWsIngestServer(
 
   function pickSocket(sessionId?: string): WebSocket | null {
     let best: WebSocket | null = null;
-    let bestActivity = -1;
+    let bestRank = -1;
+    let bestRecency = -1;
     for (const [socket, info] of connections) {
       if (socket.readyState !== WebSocket.OPEN) {
         continue;
@@ -312,15 +442,34 @@ export function startWsIngestServer(
       if (sessionId !== undefined && info.sessionId !== sessionId) {
         continue;
       }
-      if (info.lastActivityAt > bestActivity) {
+      // Prefer the page the user is looking at; among equals (e.g. two
+      // focused windows on separate monitors) the most recent one wins.
+      const rank = focusRank(info);
+      const recency = Math.max(info.lastActivityAt, info.lastFocusAt);
+      if (rank > bestRank || (rank === bestRank && recency > bestRecency)) {
         best = socket;
-        bestActivity = info.lastActivityAt;
+        bestRank = rank;
+        bestRecency = recency;
       }
     }
     return best;
   }
 
   return {
+    sessionFocus: () => {
+      const states: SessionFocusInfo[] = [];
+      for (const [socket, info] of connections) {
+        if (socket.readyState === WebSocket.OPEN && info.sessionId !== null) {
+          states.push({
+            sessionId: info.sessionId,
+            visible: info.visible,
+            focused: info.focused,
+            url: info.url,
+          });
+        }
+      }
+      return states;
+    },
     requestSnapshot: (sessionId?: string, timeoutMs: number = SNAPSHOT_TIMEOUT_MS) => {
       const socket = pickSocket(sessionId);
       if (!socket) {
@@ -338,7 +487,7 @@ export function startWsIngestServer(
           pendingSnapshots.delete(request.requestId);
           reject(new Error('The browser did not answer the snapshot request in time.'));
         }, timeoutMs);
-        pendingSnapshots.set(request.requestId, { resolve, timer });
+        pendingSnapshots.set(request.requestId, { resolve, reject, timer });
         socket.send(JSON.stringify(request));
       });
     },
@@ -367,7 +516,69 @@ export function startWsIngestServer(
             ),
           );
         }, timeoutMs);
-        pendingActions.set(request.requestId, { resolve, timer });
+        pendingActions.set(request.requestId, { resolve, reject, timer });
+        socket.send(JSON.stringify(request));
+      });
+    },
+    requestActionSequence: (
+      steps,
+      sessionId,
+      // Scaled per step: the single-action default (10s) would time out a
+      // perfectly healthy 3-step sequence whose steps each settle slowly.
+      timeoutMs: number = Math.min(5000 + steps.length * ACTION_TIMEOUT_MS, 90_000),
+    ) => {
+      const socket = pickSocket(sessionId);
+      if (!socket) {
+        return Promise.reject(
+          new Error(
+            sessionId === undefined
+              ? 'No browser session is connected to the daemon.'
+              : `No connected browser matches session "${sessionId}".`,
+          ),
+        );
+      }
+      const request: ActionSequenceRequest = {
+        kind: 'action-sequence-request',
+        requestId: randomUUID(),
+        steps,
+      };
+      return new Promise<ActionSequenceResult>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pendingSequences.delete(request.requestId);
+          reject(
+            new Error(
+              'The browser did not answer the action sequence in time. Note: there is ' +
+                'no cancellation channel — the page may still be executing the remaining ' +
+                'steps, so re-check page state before assuming nothing happened.',
+            ),
+          );
+        }, timeoutMs);
+        pendingSequences.set(request.requestId, { resolve, reject, timer });
+        socket.send(JSON.stringify(request));
+      });
+    },
+    requestSourceQuery: (source, sessionId, timeoutMs: number = SNAPSHOT_TIMEOUT_MS) => {
+      const socket = pickSocket(sessionId);
+      if (!socket) {
+        return Promise.reject(
+          new Error(
+            sessionId === undefined
+              ? 'No browser session is connected to the daemon.'
+              : `No connected browser matches session "${sessionId}".`,
+          ),
+        );
+      }
+      const request: SourceQueryRequest = {
+        kind: 'source-query-request',
+        requestId: randomUUID(),
+        source,
+      };
+      return new Promise<SourceQueryResponse>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pendingSourceQueries.delete(request.requestId);
+          reject(new Error('The browser did not answer the source query in time.'));
+        }, timeoutMs);
+        pendingSourceQueries.set(request.requestId, { resolve, reject, timer });
         socket.send(JSON.stringify(request));
       });
     },
@@ -378,14 +589,10 @@ export function startWsIngestServer(
           clearTimeout(retryTimer);
           retryTimer = null;
         }
-        for (const pending of pendingSnapshots.values()) {
-          clearTimeout(pending.timer);
-        }
-        pendingSnapshots.clear();
-        for (const pending of pendingActions.values()) {
-          clearTimeout(pending.timer);
-        }
-        pendingActions.clear();
+        drainPending(pendingSnapshots);
+        drainPending(pendingActions);
+        drainPending(pendingSourceQueries);
+        drainPending(pendingSequences);
         for (const socket of connections.keys()) {
           socket.close();
         }

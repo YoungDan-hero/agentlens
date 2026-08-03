@@ -14,11 +14,21 @@ export function installConsoleCollector(sink: EventSink, context: EventContext):
   const originals = new Map<ConsoleLevel, (typeof console)['log']>();
 
   for (const level of LEVELS) {
-    const original = console[level].bind(console);
+    // Keep the unbound original so teardown restores the exact function
+    // identity — a bound copy would drift it forever and stack a wrapper
+    // per HMR install/teardown cycle.
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- restored as-is and invoked via .apply(console)
+    const original = console[level];
     originals.set(level, original);
     console[level] = (...args: unknown[]) => {
-      sink.send(buildConsoleEvent(context, level, args));
-      original(...args);
+      // Isolated: a serialization bug must not turn console.log into a
+      // throwing function — observing must never break the observed.
+      try {
+        sink.send(buildConsoleEvent(context, level, args));
+      } catch {
+        // Swallowed by design; the app's own logging always proceeds.
+      }
+      original.apply(console, args);
     };
   }
 

@@ -67,4 +67,31 @@ describe('installNavigationCollector', () => {
     expect(window.location.pathname).toBe('/after-teardown');
     expect(sink.events).toHaveLength(0);
   });
+
+  it('restores the exact history method identity after teardown', () => {
+    const originalPush = history.pushState;
+    const originalReplace = history.replaceState;
+    const sink = makeSink();
+    teardown = installNavigationCollector(sink, context);
+    expect(history.pushState).not.toBe(originalPush);
+
+    teardown();
+    teardown = null;
+    expect(history.pushState).toBe(originalPush);
+    expect(history.replaceState).toBe(originalReplace);
+  });
+
+  it('never breaks pushState when reporting throws', () => {
+    const sink = {
+      send: () => {
+        throw new Error('sink exploded');
+      },
+    };
+    teardown = installNavigationCollector(sink, context);
+
+    expect(() => {
+      history.pushState(null, '', '/still-navigates');
+    }).not.toThrow();
+    expect(window.location.pathname).toBe('/still-navigates');
+  });
 });

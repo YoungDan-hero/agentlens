@@ -133,9 +133,12 @@ export function buildErrorContext(
     relatedNetwork: clip(network, MAX_RELATED),
     relatedConsole: clip(consoleEvents, MAX_RELATED),
     // Vitals describe page-level state, not a moment — summarize the whole
-    // session rather than the window.
+    // session rather than the window. The limit must cover everything the
+    // store can hold: FCP/TTFB fire once at page load, and a janky session
+    // emits enough long-tasks to push them out of any small newest-first
+    // sample — precisely the sessions where those vitals matter most.
     performance: summarizePerformance(
-      store.query({ type: 'performance', sessionId: error.sessionId, limit: 200 }),
+      store.query({ type: 'performance', sessionId: error.sessionId, limit: Infinity }),
     ),
     lookbackMs,
   };

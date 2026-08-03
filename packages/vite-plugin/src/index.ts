@@ -1,3 +1,5 @@
+import { relative as posixRelative } from 'node:path/posix';
+
 import { DEFAULT_WS_PORT, WS_PATH } from '@agentlensjs/shared';
 import type { Plugin } from 'vite';
 
@@ -40,6 +42,13 @@ export interface AgentLensPluginOptions {
    * @default false
    */
   allowActions?: boolean;
+  /**
+   * Tags to treat as native custom elements in Vue SFC templates, so they
+   * receive source attribution too. Mirror the `isCustomElement` you pass
+   * to `@vitejs/plugin-vue` — without it, hyphenated tags classify as
+   * components and are skipped.
+   */
+  isCustomElement?: (tag: string) => boolean;
 }
 
 export const VIRTUAL_MODULE_ID = 'virtual:agentlens';
@@ -75,12 +84,21 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
       if (!enabled) {
         return undefined;
       }
-      const [file = '', rawQuery = ''] = id.split('?', 2);
+      // indexOf, not split with a limit: a second '?' belongs to the query,
+      // split('?', 2) would silently drop everything after it.
+      const queryStart = id.indexOf('?');
+      const file = queryStart === -1 ? id : id.slice(0, queryStart);
+      const rawQuery = queryStart === -1 ? '' : id.slice(queryStart + 1);
       if (file.includes('/node_modules/')) {
         return undefined;
       }
       const normalizedRoot = root.endsWith('/') ? root : `${root}/`;
-      const fileName = file.startsWith(normalizedRoot) ? file.slice(normalizedRoot.length) : file;
+      // Files outside root (linked workspace packages) still get a relative
+      // form: an absolute dev-machine path would break the daemon's
+      // relative-path convention and leak into the page DOM.
+      const fileName = file.startsWith(normalizedRoot)
+        ? file.slice(normalizedRoot.length)
+        : posixRelative(normalizedRoot, file);
 
       let result: ReturnType<typeof injectSourceAttributes> = null;
       if (file.endsWith('.vue')) {
@@ -92,7 +110,7 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
         const isMainSfcRequest =
           !query.has('vue') && !query.has('raw') && !query.has('url') && !query.has('worker');
         if (isMainSfcRequest) {
-          result = injectVueSourceAttributes(code, fileName);
+          result = injectVueSourceAttributes(code, fileName, options.isCustomElement);
         }
       } else if (/\.[jt]sx$/.test(file)) {
         result = injectSourceAttributes(code, fileName);
@@ -114,6 +132,11 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
     load(id) {
       if (id !== RESOLVED_VIRTUAL_MODULE_ID) {
         return undefined;
+      }
+      // A manual `import 'virtual:agentlens'` must respect enabled: false
+      // too — resolve to an empty module instead of booting the runtime.
+      if (!enabled) {
+        return 'export {};';
       }
       return [
         // Resolved through this package's own dependency tree; see runtime.ts.

@@ -107,4 +107,32 @@ describe('StackResolver', () => {
 
     expect(frames).toEqual([{ functionName: 'fn', fileName: '/src/App.tsx', line: 2, column: 5 }]);
   });
+
+  it('retries after a transient download failure instead of caching it forever', async () => {
+    // First stack arrives while the dev server is restarting; the second
+    // one must trigger a fresh download, not inherit a poisoned cache.
+    vi.mocked(globalThis.fetch)
+      .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+      .mockResolvedValue(new Response(buildModuleWithInlineMap()));
+    const resolver = new StackResolver();
+    const stack = 'Error: x\n    at fn (http://localhost:5273/src/App.tsx:1:10)';
+
+    const failed = await resolver.resolve(stack);
+    expect(failed[0]?.fileName).toBe('/src/App.tsx'); // raw fallback
+
+    const recovered = await resolver.resolve(stack);
+    expect(recovered[0]?.fileName).toBe('src/App.tsx'); // source-mapped
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps "module has no sourcemap" cached — that is a stable fact', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response('console.log(1);'));
+    const resolver = new StackResolver();
+    const stack = 'Error: x\n    at fn (http://localhost:5273/src/plain.ts:3:7)';
+
+    await resolver.resolve(stack);
+    await resolver.resolve(stack);
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
 });

@@ -89,3 +89,19 @@ describe('captureLayoutSnapshot', () => {
     expect(root).toBeNull();
   });
 });
+
+describe('captureLayoutSnapshot — SVG', () => {
+  it('skips script and style elements inside SVG despite lowercase tagNames', () => {
+    stubRects(50, 50);
+    document.body.innerHTML =
+      '<svg><style>.a{fill:red}</style><script>1</script><rect class="a"></rect></svg>';
+
+    const { root } = captureLayoutSnapshot(document);
+
+    const svg = root?.children[0];
+    expect(svg?.tag).toBe('svg');
+    // Only the rect survives: SVG tagNames stay lowercase, but script and
+    // style are just as layout-irrelevant there as in HTML.
+    expect(svg?.children.map((child) => child.tag)).toEqual(['rect']);
+  });
+});

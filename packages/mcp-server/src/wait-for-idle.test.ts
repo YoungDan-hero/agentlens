@@ -50,6 +50,19 @@ describe('waitForIdle', () => {
     expect(result.waitedMs).toBeGreaterThanOrEqual(700);
   });
 
+  it('defaults to the most recently active session and ignores later noise elsewhere', async () => {
+    const store = new EventStore();
+    // The active session's last event is fresh; a background session then
+    // keeps emitting during the wait. Unscoped polling would never go
+    // idle; the documented default pins the initially most recent session.
+    store.add(makeLifecycle('active', Date.now()));
+    const noisy = setInterval(() => store.add(makeLifecycle('background', Date.now())), 50);
+
+    const result = await waitForIdle(store, { quietMs: 200, timeoutMs: 2000 });
+    clearInterval(noisy);
+    expect(result.idle).toBe(true);
+  });
+
   it('scopes idleness to the requested session', async () => {
     const store = new EventStore();
     // Another session is noisy, but the scoped one has been quiet forever.

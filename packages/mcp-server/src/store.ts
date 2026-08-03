@@ -1,4 +1,9 @@
-import type { AgentLensEvent, AgentLensEventType, ErrorEvent } from '@agentlensjs/shared';
+import type {
+  AgentLensEvent,
+  AgentLensEventType,
+  ErrorEvent,
+  StackFrame,
+} from '@agentlensjs/shared';
 
 export interface EventQuery {
   type?: AgentLensEventType;
@@ -8,6 +13,13 @@ export interface EventQuery {
   sessionId?: string;
   /** Max number of events to return, newest first. */
   limit?: number;
+  /**
+   * Only return events attributed to this source file: interactions on
+   * elements the file renders, errors whose resolved stack passes through
+   * it, network requests it initiated. Accepts `src/App.vue` (whole file)
+   * or `src/App.vue:42` (exact line).
+   */
+  source?: string;
 }
 
 export interface SessionInfo {
@@ -34,6 +46,79 @@ export interface HealthSummary {
 
 const DEFAULT_CAPACITY = 5000;
 const DEFAULT_QUERY_LIMIT = 50;
+/**
+ * Sessions are minted per page load, so a long dev day easily creates
+ * hundreds. Cap the index and evict the least recently active: their
+ * events have long been pushed out of the ring buffer anyway.
+ */
+const MAX_SESSIONS = 100;
+
+/** Origin of a page URL, or null when it cannot be parsed. */
+function urlOrigin(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** Strips leading `/` and `./` so attribution values and resolved stack
+ *  frame paths compare cleanly despite their different origins. */
+function normalizePath(path: string): string {
+  return path.replace(/^\.?\//, '');
+}
+
+/** Splits `src/App.vue:42` into file and line; plain paths keep line null. */
+function splitSourceRef(ref: string): { file: string; line: number | null } {
+  const match = /^(.*):(\d+)$/.exec(ref);
+  if (match?.[1] !== undefined && match[2] !== undefined) {
+    return { file: normalizePath(match[1]), line: Number(match[2]) };
+  }
+  return { file: normalizePath(ref), line: null };
+}
+
+/**
+ * Resolved frame paths vary by sourcemap flavor: relative (`src/App.vue`),
+ * rooted or absolute (`/Users/.../src/App.vue`), or basename-only (`App.vue`
+ * — what @vitejs/plugin-vue emits for SFCs). Boundary-aware suffix matching
+ * in both directions covers all of them without `NotApp.vue`-style false
+ * positives; basename-only maps trade a little directory precision for not
+ * silently missing every Vue frame.
+ */
+function fileNameMatches(fileName: string, file: string): boolean {
+  const normalized = normalizePath(fileName);
+  return normalized === file || normalized.endsWith(`/${file}`) || file.endsWith(`/${normalized}`);
+}
+
+function frameMatches(frames: StackFrame[], file: string, line: number | null): boolean {
+  return frames.some(
+    (frame) =>
+      frame.fileName !== null &&
+      fileNameMatches(frame.fileName, file) &&
+      (line === null || frame.line === line),
+  );
+}
+
+/** Whether an event is attributed to the given source file (or file:line). */
+function matchesSource(event: AgentLensEvent, filter: string): boolean {
+  const { file, line } = splitSourceRef(filter);
+  if (event.type === 'interaction') {
+    if (event.target.source === null) {
+      return false;
+    }
+    const target = splitSourceRef(event.target.source);
+    // Same tolerant path comparison as stack frames, so `App.vue` and
+    // `src/App.vue` behave identically across event kinds.
+    return fileNameMatches(target.file, file) && (line === null || target.line === line);
+  }
+  if (event.type === 'error') {
+    return frameMatches(event.frames, file, line);
+  }
+  if (event.type === 'network') {
+    return frameMatches(event.initiatorFrames, file, line);
+  }
+  return false;
+}
 
 function errorFingerprint(event: ErrorEvent): string {
   // Message plus the top raw stack frame distinguishes same-message errors
@@ -124,7 +209,12 @@ export class EventStore {
       if (query.sessionId !== undefined && event.sessionId !== query.sessionId) {
         continue;
       }
-      if (query.sinceMs !== undefined && event.timestamp < query.sinceMs) {
+      // Strictly newer, as documented — callers pass the timestamp of the
+      // last event they saw and must not receive it again.
+      if (query.sinceMs !== undefined && event.timestamp <= query.sinceMs) {
+        continue;
+      }
+      if (query.source !== undefined && !matchesSource(event, query.source)) {
         continue;
       }
       result.push(event);
@@ -148,16 +238,28 @@ export class EventStore {
   }
 
   /**
-   * Whether new code reached the browser after `sinceMs` — either a hot
-   * module update or a full page (re)load.
+   * Timestamp (browser clock) of the latest code update — a hot module
+   * update or full page (re)load — strictly after `sinceMs`, or null.
+   *
+   * When `origin` is given, only lifecycle events from pages of that origin
+   * count: with two dev servers running, an HMR in the *other* project must
+   * not read as "the fix reached this app". Session ids cannot scope this —
+   * a full reload mints a new session — but the origin is stable.
    */
-  hasCodeUpdateSince(sinceMs: number): boolean {
-    return this.events.some(
-      (event) =>
+  latestCodeUpdateSince(sinceMs: number, origin?: string): number | null {
+    let latest: number | null = null;
+    for (const event of this.events) {
+      if (
         event.type === 'lifecycle' &&
         (event.phase === 'hmr-update' || event.phase === 'load') &&
-        event.timestamp > sinceMs,
-    );
+        event.timestamp > sinceMs &&
+        (origin === undefined || urlOrigin(event.url) === origin) &&
+        (latest === null || event.timestamp > latest)
+      ) {
+        latest = event.timestamp;
+      }
+    }
+    return latest;
   }
 
   /** Sessions ordered by most recent activity first. */
@@ -214,6 +316,17 @@ export class EventStore {
       existing.lastSeenAt = Math.max(existing.lastSeenAt, event.timestamp);
       existing.eventCount += 1;
       return;
+    }
+    if (this.sessions.size >= MAX_SESSIONS) {
+      let oldest: SessionInfo | null = null;
+      for (const session of this.sessions.values()) {
+        if (oldest === null || session.lastSeenAt < oldest.lastSeenAt) {
+          oldest = session;
+        }
+      }
+      if (oldest) {
+        this.sessions.delete(oldest.sessionId);
+      }
     }
     this.sessions.set(event.sessionId, {
       sessionId: event.sessionId,

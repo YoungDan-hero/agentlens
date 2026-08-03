@@ -159,3 +159,26 @@ describe('sanitizeBody', () => {
     expect(sanitizeBody('{"password":"hunter2"}')).toBe(`{"password":"${REDACTED}"}`);
   });
 });
+
+describe('redaction hardening', () => {
+  it('drops subtrees beyond the depth cap instead of leaking them', () => {
+    // A credential at depth 33 must never pass through verbatim just
+    // because the walk gave up.
+    let deep: Record<string, unknown> = { password: 'hunter2' };
+    for (let i = 0; i < 40; i += 1) {
+      deep = { nested: deep };
+    }
+    const result = redactBodyText(JSON.stringify(deep));
+    expect(result).not.toContain('hunter2');
+    expect(result).toContain('[MaxDepth]');
+  });
+
+  it('preserves a "__proto__" key as plain data', () => {
+    // Assigning to a normal object would hit the prototype setter and drop
+    // the field from the output entirely.
+    const result = redactBodyText('{"__proto__":{"a":1},"user":"dan"}');
+    expect(result).toContain('"__proto__"');
+    expect(result).toContain('"a":1');
+    expect(result).toContain('"user":"dan"');
+  });
+});

@@ -58,9 +58,29 @@ function makePerformance(overrides: Partial<PerformanceEvent> = {}): Performance
 /** Wires a real MCP client to the server over an in-memory transport. */
 async function connect(
   store: EventStore,
-  ingest?: Pick<WsIngestServer, 'requestSnapshot' | 'requestAction'>,
+  ingest?: Partial<
+    Pick<
+      WsIngestServer,
+      | 'requestSnapshot'
+      | 'requestAction'
+      | 'requestActionSequence'
+      | 'requestSourceQuery'
+      | 'sessionFocus'
+    >
+  >,
 ): Promise<Client> {
-  const server = createMcpServer(store, '0.0.0-test', ingest);
+  const server = createMcpServer(
+    store,
+    '0.0.0-test',
+    ingest && {
+      requestSnapshot: ingest.requestSnapshot ?? (() => Promise.reject(new Error('unused'))),
+      requestAction: ingest.requestAction ?? (() => Promise.reject(new Error('unused'))),
+      requestActionSequence:
+        ingest.requestActionSequence ?? (() => Promise.reject(new Error('unused'))),
+      requestSourceQuery: ingest.requestSourceQuery ?? (() => Promise.reject(new Error('unused'))),
+      sessionFocus: ingest.sessionFocus ?? (() => []),
+    },
+  );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test-agent', version: '0.0.0' });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -78,7 +98,7 @@ async function callJson(client: Client, name: string, args?: Record<string, unkn
 }
 
 describe('createMcpServer', () => {
-  it('registers all ten tools when an ingest server is provided', async () => {
+  it('registers all thirteen tools when an ingest server is provided', async () => {
     const client = await connect(new EventStore(), {
       requestSnapshot: () => Promise.reject(new Error('unused')),
       requestAction: () => Promise.reject(new Error('unused')),
@@ -86,6 +106,7 @@ describe('createMcpServer', () => {
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      'find_elements_by_source',
       'get_error_context',
       'get_interaction_timeline',
       'get_layout_snapshot',
@@ -94,6 +115,8 @@ describe('createMcpServer', () => {
       'get_recent_events',
       'list_sessions',
       'perform_action',
+      'perform_actions',
+      'replay_error_path',
       'verify_fix',
       'wait_for_idle',
     ]);
@@ -105,7 +128,101 @@ describe('createMcpServer', () => {
 
     expect(tools.map((tool) => tool.name)).not.toContain('get_layout_snapshot');
     expect(tools.map((tool) => tool.name)).not.toContain('perform_action');
+    expect(tools.map((tool) => tool.name)).not.toContain('find_elements_by_source');
     expect(tools).toHaveLength(8);
+  });
+
+  it('get_recent_events filters by source attribution', async () => {
+    const store = new EventStore();
+    store.add(makeInteraction()); // target.source = src/App.tsx:10
+    store.add(makeError()); // no frames -> never matches a source filter
+    const client = await connect(store);
+
+    const byFile = (await callJson(client, 'get_recent_events', {
+      source: 'src/App.tsx',
+    })) as unknown as { type: string }[];
+    expect(byFile).toHaveLength(1);
+    expect(byFile[0]?.type).toBe('interaction');
+
+    const byLine = (await callJson(client, 'get_recent_events', {
+      source: 'src/App.tsx:10',
+    })) as unknown as unknown[];
+    expect(byLine).toHaveLength(1);
+
+    const miss = (await callJson(client, 'get_recent_events', {
+      source: 'src/Other.tsx',
+    })) as unknown as unknown[];
+    expect(miss).toHaveLength(0);
+  });
+
+  it('find_elements_by_source forwards the query and surfaces failures', async () => {
+    let received: unknown;
+    const client = await connect(new EventStore(), {
+      requestSourceQuery: (source, sessionId) => {
+        received = { source, sessionId };
+        return Promise.resolve({
+          kind: 'source-query-response' as const,
+          requestId: 'r1',
+          sessionId: 'session-1',
+          url: 'http://localhost:5173/',
+          capturedAt: Date.now(),
+          elements: [
+            { tag: 'button', id: 'go', text: 'Go', visible: true, source: 'src/App.vue:3' },
+          ],
+          truncated: false,
+        });
+      },
+    });
+
+    const result = await callJson(client, 'find_elements_by_source', { file: 'src/App.vue' });
+    expect(received).toEqual({ source: 'src/App.vue', sessionId: undefined });
+    expect(result.elements).toHaveLength(1);
+
+    const failing = await connect(new EventStore(), {
+      requestSourceQuery: () => Promise.reject(new Error('No browser session is connected.')),
+    });
+    const failure = await callJson(failing, 'find_elements_by_source', { file: 'src/App.vue' });
+    expect(failure.error).toBe('No browser session is connected.');
+  });
+
+  it('list_sessions merges live focus state from connected sessions', async () => {
+    const store = new EventStore();
+    store.add(makeError({ sessionId: 'session-1' }));
+    store.add(makeError({ sessionId: 'session-2' }));
+    const client = await connect(store, {
+      sessionFocus: () => [
+        {
+          sessionId: 'session-1',
+          visible: true,
+          focused: true,
+          url: 'http://localhost:5173/#/settings',
+        },
+      ],
+    });
+
+    const sessions = (await callJson(client, 'list_sessions')) as unknown as {
+      sessionId: string;
+      connected: boolean;
+      visible: boolean | null;
+      focused: boolean | null;
+      liveUrl: string | null;
+    }[];
+
+    const focusedSession = sessions.find((s) => s.sessionId === 'session-1');
+    const staleSession = sessions.find((s) => s.sessionId === 'session-2');
+    expect(focusedSession).toMatchObject({
+      connected: true,
+      visible: true,
+      focused: true,
+      liveUrl: 'http://localhost:5173/#/settings',
+    });
+    // Disconnected sessions carry no live state — null, not false.
+    expect(staleSession).toMatchObject({
+      connected: false,
+      visible: null,
+      focused: null,
+      liveUrl: null,
+    });
   });
 
   it('get_page_health summarizes the store', async () => {
@@ -243,6 +360,125 @@ describe('createMcpServer', () => {
     // Wire-envelope fields are daemon-internal and must not reach the agent.
     expect(result.kind).toBeUndefined();
     expect(result.requestId).toBeUndefined();
+  });
+
+  it('perform_actions maps steps onto the wire shape and strips the envelope', async () => {
+    let received: unknown;
+    const client = await connect(new EventStore(), {
+      requestActionSequence: (steps, sessionId, timeoutMs) => {
+        received = { steps, sessionId, timeoutMs };
+        return Promise.resolve({
+          kind: 'action-sequence-result' as const,
+          requestId: 'r1',
+          sessionId: 'session-1',
+          ok: true,
+          stoppedAt: null,
+          stopReason: null,
+          stepResults: [],
+          totalEffects: { errors: 0, failedRequests: 0, consoleErrors: 0 },
+          finalUrl: 'http://localhost:5173/',
+        });
+      },
+    });
+
+    const result = await callJson(client, 'perform_actions', {
+      steps: [
+        { action: 'input', selector: '#name', value: 'Ada' },
+        { action: 'click', text: 'Submit', waitFor: { selector: '#name', state: 'visible' } },
+      ],
+    });
+
+    expect(received).toMatchObject({
+      steps: [
+        { action: 'input', target: { selector: '#name' }, value: 'Ada' },
+        { action: 'click', target: { text: 'Submit' }, waitFor: { selector: '#name' } },
+      ],
+    });
+    // Budget: 2 steps x (5000 wait + 5000 settle) + 5000 margin.
+    expect((received as { timeoutMs: number }).timeoutMs).toBe(25_000);
+    expect(result.ok).toBe(true);
+    expect(result.kind).toBeUndefined();
+    expect(result.requestId).toBeUndefined();
+  });
+
+  it('replay_error_path dry-runs a script, then executes with values and reports recurrence', async () => {
+    const store = new EventStore();
+    const interaction: InteractionEvent = {
+      id: 'i-replay',
+      type: 'interaction',
+      subtype: 'input',
+      timestamp: Date.now() - 500,
+      sessionId: 'session-1',
+      url: 'http://localhost:5173/',
+      target: { tag: 'input', id: 'email', text: null, source: null },
+    };
+    store.add(interaction);
+    const stored = store.add(
+      makeError({ stack: 'Error: boom\n    at pay (http://localhost:5173/src/pay.ts:1:1)' }),
+    );
+
+    let executed: unknown;
+    const client = await connect(store, {
+      requestActionSequence: (steps) => {
+        executed = steps;
+        // The replayed path re-triggers the error: the store folds a repeat.
+        store.add(
+          makeError({
+            stack: 'Error: boom\n    at pay (http://localhost:5173/src/pay.ts:1:1)',
+          }),
+        );
+        return Promise.resolve({
+          kind: 'action-sequence-result' as const,
+          requestId: 'r1',
+          sessionId: 'session-1',
+          ok: true,
+          stoppedAt: null,
+          stopReason: null,
+          stepResults: [],
+          totalEffects: { errors: 1, failedRequests: 0, consoleErrors: 0 },
+          finalUrl: 'http://localhost:5173/',
+        });
+      },
+    });
+
+    const dry = await callJson(client, 'replay_error_path', { errorId: stored.id });
+    expect(dry.executable).toBe(true);
+    expect(dry.needsValue).toEqual([0]);
+    expect(String(dry.hint)).toContain('supply values');
+    expect(executed).toBeUndefined();
+
+    const run = await callJson(client, 'replay_error_path', {
+      errorId: stored.id,
+      dryRun: false,
+      values: { '0': 'ada@example.com' },
+    });
+    expect(executed).toEqual([
+      { action: 'input', target: { selector: '[id="email"]' }, value: 'ada@example.com' },
+    ]);
+    expect(run.errorRecurred).toBe(true);
+    expect(run.occurrencesBefore).toBe(1);
+    expect(run.occurrencesAfter).toBe(2);
+  });
+
+  it('replay_error_path refuses to execute with missing input values', async () => {
+    const store = new EventStore();
+    store.add({
+      id: 'i-noval',
+      type: 'interaction',
+      subtype: 'input',
+      timestamp: Date.now() - 500,
+      sessionId: 'session-1',
+      url: 'http://localhost:5173/',
+      target: { tag: 'input', id: 'email', text: null, source: null },
+    } satisfies InteractionEvent);
+    const stored = store.add(makeError());
+    const client = await connect(store, {});
+
+    const result = await callJson(client, 'replay_error_path', {
+      errorId: stored.id,
+      dryRun: false,
+    });
+    expect(result.error).toContain('need a value');
   });
 
   it('perform_action surfaces transport failures as an error payload', async () => {

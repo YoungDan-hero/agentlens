@@ -58,4 +58,33 @@ describe('installConsoleCollector', () => {
     console.info('after teardown');
     expect(events).toHaveLength(0);
   });
+
+  it('restores the exact console function identity after teardown', () => {
+    // A bound copy would look the same but break identity comparisons and
+    // stack a wrapper per HMR install/teardown cycle.
+    const original = console.debug;
+    const { sink } = createSink();
+    teardown = installConsoleCollector(sink, context);
+    expect(console.debug).not.toBe(original);
+
+    teardown();
+    teardown = undefined;
+    expect(console.debug).toBe(original);
+  });
+
+  it('never breaks console when event building or the sink throws', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const sink = {
+      send: () => {
+        throw new Error('sink exploded');
+      },
+    };
+    teardown = installConsoleCollector(sink, context);
+
+    expect(() => {
+      console.error('app message');
+    }).not.toThrow();
+    // The app's own logging must still have gone through.
+    expect(spy).toHaveBeenCalledWith('app message');
+  });
 });

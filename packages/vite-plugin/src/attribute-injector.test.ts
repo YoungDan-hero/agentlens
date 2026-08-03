@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { SOURCE_ATTRIBUTE } from '@agentlensjs/shared';
+import { parse } from '@babel/parser';
 
 import { injectSourceAttributes } from './attribute-injector';
 
@@ -75,5 +76,16 @@ describe('injectSourceAttributes', () => {
   it('returns null for modules without host elements or with broken syntax', () => {
     expect(injectSourceAttributes('export const n = 1;', 'src/n.ts')).toBeNull();
     expect(injectSourceAttributes('const ??? = <div>;', 'src/broken.tsx')).toBeNull();
+  });
+
+  it('escapes quotes in file names with entities so the output stays parseable', () => {
+    // JSX attribute values do not understand backslash escapes: a
+    // JSON.stringify-style \" would make the module unparseable downstream.
+    const result = injectSourceAttributes('export const A = () => <div />;', 'src/a"b&c.tsx');
+    expect(result?.code).toContain(`${SOURCE_ATTRIBUTE}="src/a&quot;b&amp;c.tsx:1"`);
+    // Round-trip: the emitted module must still parse as strict JSX.
+    expect(() =>
+      parse(result?.code ?? '', { sourceType: 'module', plugins: ['jsx', 'typescript'] }),
+    ).not.toThrow();
   });
 });

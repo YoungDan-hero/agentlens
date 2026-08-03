@@ -134,4 +134,37 @@ describe('agentlens vite plugin', () => {
     expect(callHook(disabled.transform, jsx, '/repo/app/src/A.tsx')).toBeUndefined();
     expect(callHook(disabled.transform, sfc, '/repo/app/src/App.vue')).toBeUndefined();
   });
+
+  it('serves an empty virtual module when disabled', () => {
+    // A manual `import 'virtual:agentlens'` must not boot the runtime just
+    // because the module resolves.
+    const plugin = agentlens({ enabled: false });
+    const resolved = callHook(plugin.resolveId, VIRTUAL_MODULE_ID) as string;
+    const code = callHook(plugin.load, resolved) as string;
+    expect(code).toBe('export {};');
+  });
+
+  it('keeps files outside the vite root relative instead of absolute', () => {
+    // Linked workspace packages live outside root; an absolute path would
+    // leak the dev machine's directory layout into the page DOM.
+    const plugin = agentlens();
+    callHook(plugin.configResolved, { root: '/repo/app' });
+
+    const result = callHook(
+      plugin.transform,
+      'export const B = () => <div />;',
+      '/repo/packages/ui/src/Button.tsx',
+    ) as { code: string } | undefined;
+    expect(result?.code).toContain('data-agentlens-source="../packages/ui/src/Button.tsx:1"');
+  });
+
+  it('forwards isCustomElement so custom elements get attributed in vue templates', () => {
+    const plugin = agentlens({ isCustomElement: (tag) => tag.startsWith('my-') });
+    callHook(plugin.configResolved, { root: '/repo/app' });
+
+    const sfc = '<template>\n  <my-widget></my-widget>\n</template>';
+    const result = callHook(plugin.transform, sfc, '/repo/app/src/App.vue') as
+      { code: string } | undefined;
+    expect(result?.code).toContain('<my-widget data-agentlens-source="src/App.vue:2">');
+  });
 });

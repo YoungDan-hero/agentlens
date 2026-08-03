@@ -17,6 +17,8 @@ export interface TransportOptions {
   maxBatchSize?: number;
   /** Called for every JSON message the daemon pushes down the socket. */
   onMessage?: (message: unknown) => void;
+  /** Called every time the socket (re)connects, after queued events flush. */
+  onOpen?: () => void;
 }
 
 const DEFAULT_MAX_QUEUE = 500;
@@ -43,6 +45,7 @@ export class Transport implements EventSink {
   private readonly batchWindowMs: number;
   private readonly maxBatchSize: number;
   private readonly onMessage: ((message: unknown) => void) | undefined;
+  private readonly onOpen: (() => void) | undefined;
 
   constructor(options: TransportOptions) {
     this.endpoint = options.endpoint;
@@ -50,6 +53,7 @@ export class Transport implements EventSink {
     this.batchWindowMs = options.batchWindowMs ?? DEFAULT_BATCH_WINDOW_MS;
     this.maxBatchSize = options.maxBatchSize ?? DEFAULT_MAX_BATCH_SIZE;
     this.onMessage = options.onMessage;
+    this.onOpen = options.onOpen;
     this.connect();
   }
 
@@ -131,6 +135,7 @@ export class Transport implements EventSink {
     socket.addEventListener('open', () => {
       this.reconnectAttempts = 0;
       this.flush();
+      this.onOpen?.();
     });
 
     socket.addEventListener('message', (event) => {

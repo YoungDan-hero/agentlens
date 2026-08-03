@@ -45,8 +45,12 @@ function observeEntries(
   callback: (entries: PerformanceEntry[]) => void,
   extraOptions: Record<string, unknown> = {},
 ): PerformanceObserver | null {
-  const supported = PerformanceObserver.supportedEntryTypes;
-  if (!supported.includes(type)) {
+  // Older engines (e.g. Safari ≤12) ship PerformanceObserver without the
+  // static supportedEntryTypes — its absence must degrade, not crash init.
+  const supported: readonly string[] | undefined = (
+    PerformanceObserver as { supportedEntryTypes?: readonly string[] }
+  ).supportedEntryTypes;
+  if (supported?.includes(type) !== true) {
     return null;
   }
   try {

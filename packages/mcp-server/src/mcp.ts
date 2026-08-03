@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import type { EventStore } from './store';
 import { buildErrorContext } from './error-context';
+import { buildReplayScript } from './replay';
 import { summarizePerformance } from './performance-summary';
 import { buildTimeline } from './timeline';
 import { verifyFix } from './verify-fix';
@@ -29,7 +30,14 @@ function jsonResult(payload: unknown): TextResult {
 export function createMcpServer(
   store: EventStore,
   version: string,
-  ingest?: Pick<WsIngestServer, 'requestSnapshot' | 'requestAction'>,
+  ingest?: Pick<
+    WsIngestServer,
+    | 'requestSnapshot'
+    | 'requestAction'
+    | 'requestActionSequence'
+    | 'requestSourceQuery'
+    | 'sessionFocus'
+  >,
 ): McpServer {
   const server = new McpServer({ name: 'agentlens', version });
 
@@ -55,9 +63,27 @@ export function createMcpServer(
       title: 'List page sessions',
       description:
         'Lists known page sessions (one per page load / tab), most recently active ' +
-        'first. Use the sessionId to scope other tools when multiple pages are open.',
+        'first. Connected sessions carry live focus state: `focused: true` marks ' +
+        'the page the user is looking at right now — prefer it when the user says ' +
+        '"this page" — and `liveUrl` reflects the current SPA route even when no ' +
+        'events fired since. Use the sessionId to scope other tools.',
     },
-    () => jsonResult(store.listSessions()),
+    () => {
+      const focus = new Map((ingest?.sessionFocus() ?? []).map((s) => [s.sessionId, s]));
+      return jsonResult(
+        store.listSessions().map((session) => {
+          const live = focus.get(session.sessionId);
+          return {
+            ...session,
+            connected: live !== undefined,
+            visible: live?.visible ?? null,
+            focused: live?.focused ?? null,
+            // Fresher than `url` after SPA route changes that emit no events.
+            liveUrl: live?.url ?? null,
+          };
+        }),
+      );
+    },
   );
 
   server.registerTool(
@@ -66,8 +92,8 @@ export function createMcpServer(
       title: 'Get recent events',
       description:
         'Query captured runtime events (errors, console output, network requests, ' +
-        'lifecycle, performance), newest first. Filter by type and time to keep ' +
-        'responses small.',
+        'lifecycle, performance), newest first. Filter by type, time or source file ' +
+        'to keep responses small.',
       inputSchema: {
         type: z
           .enum(['error', 'console', 'network', 'lifecycle', 'interaction', 'performance'])
@@ -80,6 +106,15 @@ export function createMcpServer(
           .optional()
           .describe('Only events newer than this epoch-milliseconds timestamp'),
         limit: z.number().int().min(1).max(200).optional().describe('Defaults to 50'),
+        source: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Only events attributed to this source file (`src/App.vue`) or line ' +
+              '(`src/App.vue:42`): interactions on its elements, errors whose ' +
+              'resolved stack passes through it, requests it initiated',
+          ),
       },
     },
     (args) =>
@@ -89,6 +124,7 @@ export function createMcpServer(
           ...(args.sessionId !== undefined && { sessionId: args.sessionId }),
           ...(args.sinceMs !== undefined && { sinceMs: args.sinceMs }),
           ...(args.limit !== undefined && { limit: args.limit }),
+          ...(args.source !== undefined && { source: args.source }),
         }),
       ),
   );
@@ -165,7 +201,9 @@ export function createMcpServer(
       const sessionId = args.sessionId ?? store.listSessions()[0]?.sessionId;
       const events = store.query({
         type: 'performance',
-        limit: 200,
+        // Unbounded: one-shot vitals (FCP, TTFB) must survive long-task
+        // storms that would push them out of a small newest-first sample.
+        limit: Infinity,
         ...(sessionId !== undefined && { sessionId }),
         ...(args.sinceMs !== undefined && { sinceMs: args.sinceMs }),
       });
@@ -265,7 +303,10 @@ export function createMcpServer(
         sessionId: z
           .string()
           .optional()
-          .describe('Scope to a page session; defaults to the most recently active one'),
+          .describe(
+            'Scope to a page session; defaults to the focused session when known, ' +
+              'else the most recently active one',
+          ),
         quietMs: z
           .number()
           .int()
@@ -282,14 +323,19 @@ export function createMcpServer(
           .describe('Max wait. Defaults to 10000.'),
       },
     },
-    async (args) =>
-      jsonResult(
+    async (args) => {
+      // The page the user is looking at is the one the agent is testing;
+      // fall back to waitForIdle's own default (most recently active).
+      const focused = ingest?.sessionFocus().find((session) => session.focused === true)?.sessionId;
+      const sessionId = args.sessionId ?? focused;
+      return jsonResult(
         await waitForIdle(store, {
-          ...(args.sessionId !== undefined && { sessionId: args.sessionId }),
+          ...(sessionId !== undefined && { sessionId }),
           ...(args.quietMs !== undefined && { quietMs: args.quietMs }),
           ...(args.timeoutMs !== undefined && { timeoutMs: args.timeoutMs }),
         }),
-      ),
+      );
+    },
   );
 
   if (ingest) {
@@ -367,6 +413,230 @@ export function createMcpServer(
       },
     );
 
+    const waitForSchema = z
+      .object({
+        source: z.string().min(1).optional().describe('Await element(s) with this source value'),
+        selector: z.string().min(1).optional().describe('Await element(s) matching this selector'),
+        text: z.string().min(1).optional().describe('Await element(s) containing this text'),
+        state: z
+          .enum(['visible', 'attached', 'hidden'])
+          .optional()
+          .describe('Condition to await; defaults to visible'),
+        timeoutMs: z.number().int().min(50).max(15_000).optional().describe('Defaults to 5000'),
+      })
+      .describe('Condition to await before executing this step');
+
+    const stepSchema = z.object({
+      action: z.enum(['click', 'input', 'select', 'scroll', 'navigate']),
+      source: z.string().min(1).optional().describe('Locate by data-agentlens-source value'),
+      selector: z.string().min(1).optional().describe('Locate by CSS selector'),
+      text: z.string().min(1).optional().describe('Locate by visible text'),
+      nth: z.number().int().min(0).optional().describe('Index when the locator is ambiguous'),
+      value: z.string().optional().describe('Text to type or option to pick'),
+      url: z.string().min(1).optional().describe('Same-origin URL (navigate, last step only)'),
+      x: z.number().optional().describe('Scroll x (scroll without target)'),
+      y: z.number().optional().describe('Scroll y (scroll without target)'),
+      waitFor: waitForSchema.optional(),
+    });
+
+    server.registerTool(
+      'perform_actions',
+      {
+        title: 'Perform a sequence of page actions',
+        description:
+          'Runs up to 20 page actions in order in one round-trip — the fast path for ' +
+          'scripted flows like filling a form and submitting it. Each step may declare ' +
+          'a waitFor condition (element visible/attached/hidden) that is polled locally ' +
+          'before the step executes, so async UI (loading options, conditional fields) ' +
+          'needs no agent round-trip. The sequence stops at the first failure — or ' +
+          'immediately if the user starts interacting — and reports the break point ' +
+          '(stoppedAt, stopReason), per-step outcomes, accumulated effects and the ' +
+          'final URL, so you can re-plan from where it stopped. navigate is only ' +
+          'allowed as the final step. Same opt-in and audit trail as perform_action.',
+        inputSchema: {
+          steps: z.array(stepSchema).min(1).max(20).describe('Steps to run in order'),
+          sessionId: z
+            .string()
+            .optional()
+            .describe('Target a specific page session; defaults to the focused one'),
+        },
+      },
+      async (args) => {
+        const steps = args.steps.map((step) => {
+          const target =
+            step.source !== undefined || step.selector !== undefined || step.text !== undefined
+              ? {
+                  ...(step.source !== undefined && { source: step.source }),
+                  ...(step.selector !== undefined && { selector: step.selector }),
+                  ...(step.text !== undefined && { text: step.text }),
+                  ...(step.nth !== undefined && { nth: step.nth }),
+                }
+              : undefined;
+          return {
+            action: step.action,
+            ...(target !== undefined && { target }),
+            ...(step.value !== undefined && { value: step.value }),
+            ...(step.url !== undefined && { url: step.url }),
+            ...(step.x !== undefined && { x: step.x }),
+            ...(step.y !== undefined && { y: step.y }),
+            ...(step.waitFor !== undefined && {
+              waitFor: {
+                ...(step.waitFor.source !== undefined && { source: step.waitFor.source }),
+                ...(step.waitFor.selector !== undefined && { selector: step.waitFor.selector }),
+                ...(step.waitFor.text !== undefined && { text: step.waitFor.text }),
+                ...(step.waitFor.state !== undefined && { state: step.waitFor.state }),
+                ...(step.waitFor.timeoutMs !== undefined && { timeoutMs: step.waitFor.timeoutMs }),
+              },
+            }),
+          };
+        });
+        // Budget: per step, the wait ceiling plus the settle ceiling (5s),
+        // plus a fixed margin — capped so a runaway page cannot hold the
+        // agent hostage for minutes.
+        const timeoutMs = Math.min(
+          steps.reduce(
+            (sum, step) => sum + Math.min(step.waitFor?.timeoutMs ?? 5000, 15_000) + 5000,
+            5000,
+          ),
+          90_000,
+        );
+        try {
+          const {
+            kind: _kind,
+            requestId: _requestId,
+            ...result
+          } = await ingest.requestActionSequence(steps, args.sessionId, timeoutMs);
+          return jsonResult(result);
+        } catch (error) {
+          return jsonResult({ error: error instanceof Error ? error.message : String(error) });
+        }
+      },
+    );
+
+    server.registerTool(
+      'replay_error_path',
+      {
+        title: 'Replay the interaction path that led to an error',
+        description:
+          'Turns the human interactions that preceded an error into an action ' +
+          'sequence and (optionally) runs it — the one-command fix-verification ' +
+          'loop: fix the code, replay the path, see whether the error recurs. ' +
+          'Defaults to a dry run that returns the derived script: review it, ' +
+          'supply values for input steps (typed values are never captured), then ' +
+          'call again with dryRun: false. Execution reports the sequence outcome ' +
+          'plus errorRecurred, comparing the error fingerprint\u2019s occurrence ' +
+          'count before and after the run. If the page has navigated away since, ' +
+          'navigate back to errorUrl first. Requires allowActions: true.',
+        inputSchema: {
+          fingerprint: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('Error fingerprint (from get_page_health / get_recent_events)'),
+          errorId: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('Error event id; defaults to the most recent error'),
+          lookbackMs: z
+            .number()
+            .int()
+            .min(1000)
+            .max(120_000)
+            .optional()
+            .describe('How far before the error to look for interactions; defaults to 15000'),
+          dryRun: z
+            .boolean()
+            .optional()
+            .describe('Default true: return the derived script without executing it'),
+          values: z
+            .record(z.string(), z.string())
+            .optional()
+            .describe('Text for input steps, keyed by step index, e.g. {"0": "Ada"}'),
+          sessionId: z
+            .string()
+            .optional()
+            .describe('Session to replay in; defaults to the focused one'),
+        },
+      },
+      async (args) => {
+        const script = buildReplayScript(
+          store,
+          {
+            ...(args.fingerprint !== undefined && { fingerprint: args.fingerprint }),
+            ...(args.errorId !== undefined && { errorId: args.errorId }),
+          },
+          { ...(args.lookbackMs !== undefined && { lookbackMs: args.lookbackMs }) },
+        );
+        if (!('steps' in script)) {
+          return jsonResult(script);
+        }
+
+        const steps = script.steps.map((step, index) => {
+          const value = args.values?.[String(index)];
+          return step.action === 'input' && value !== undefined ? { ...step, value } : step;
+        });
+        const missingValues = script.needsValue.filter(
+          (index) => args.values?.[String(index)] === undefined,
+        );
+
+        if (args.dryRun !== false) {
+          return jsonResult({
+            ...script,
+            hint:
+              missingValues.length > 0
+                ? `supply values for input step(s) ${missingValues.join(', ')} and call again with dryRun: false`
+                : 'call again with dryRun: false to execute',
+          });
+        }
+        if (!script.executable) {
+          return jsonResult({
+            error: 'the script cannot run as-is — see warnings',
+            warnings: script.warnings,
+          });
+        }
+        if (missingValues.length > 0) {
+          return jsonResult({
+            error:
+              `input step(s) ${missingValues.join(', ')} need a value — pass ` +
+              'values: {"<stepIndex>": "text"} (typed values are never captured)',
+          });
+        }
+
+        const occurrencesBefore =
+          script.fingerprint !== null
+            ? (store.getErrorByFingerprint(script.fingerprint)?.occurrences ?? 0)
+            : 0;
+        const timeoutMs = Math.min(steps.length * 10_000 + 5000, 90_000);
+        try {
+          const {
+            kind: _kind,
+            requestId: _requestId,
+            ...result
+          } = await ingest.requestActionSequence(steps, args.sessionId, timeoutMs);
+          // Quiet-path ordering (batch every ~100ms, result after ≥500ms of
+          // quiet) makes the error batch arrive first — but a sequence whose
+          // settle TIMED OUT returns while events are still flowing, and the
+          // result frame (sendRaw, unbatched) can overtake the final batch.
+          // A grace period longer than the batch window closes that race.
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          const occurrencesAfter =
+            script.fingerprint !== null
+              ? (store.getErrorByFingerprint(script.fingerprint)?.occurrences ?? 0)
+              : 0;
+          return jsonResult({
+            ...result,
+            fingerprint: script.fingerprint,
+            occurrencesBefore,
+            occurrencesAfter,
+            errorRecurred: occurrencesAfter > occurrencesBefore,
+          });
+        } catch (error) {
+          return jsonResult({ error: error instanceof Error ? error.message : String(error) });
+        }
+      },
+    );
+
     server.registerTool(
       'get_layout_snapshot',
       {
@@ -387,6 +657,37 @@ export function createMcpServer(
       async (args) => {
         try {
           return jsonResult(await ingest.requestSnapshot(args.sessionId));
+        } catch (error) {
+          return jsonResult({ error: error instanceof Error ? error.message : String(error) });
+        }
+      },
+    );
+
+    server.registerTool(
+      'find_elements_by_source',
+      {
+        title: 'Find elements rendered by a source file',
+        description:
+          'Reverse source lookup: lists the elements a source file is rendering on ' +
+          'the live page right now (tag, id, visible text, visibility, exact ' +
+          '"file:line" attribution). Use it right after editing a component to see ' +
+          'its runtime output, or to find something to click for perform_action. ' +
+          'Complements get_recent_events\u2019 source filter, which answers what ' +
+          'happened around this file\u2019s elements.',
+        inputSchema: {
+          file: z
+            .string()
+            .min(1)
+            .describe('Source path as attributed, e.g. "src/App.vue", or exact "src/App.vue:42"'),
+          sessionId: z
+            .string()
+            .optional()
+            .describe('Target a specific page session; defaults to the most active one'),
+        },
+      },
+      async (args) => {
+        try {
+          return jsonResult(await ingest.requestSourceQuery(args.file, args.sessionId));
         } catch (error) {
           return jsonResult({ error: error instanceof Error ? error.message : String(error) });
         }

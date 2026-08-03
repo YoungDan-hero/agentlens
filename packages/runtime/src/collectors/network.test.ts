@@ -195,6 +195,76 @@ describe('installNetworkCollector', () => {
 
     expect(lastNetworkEvent(events).responseBody).toBe('[body omitted: 1000000 bytes]');
   });
+
+  it('never drains ndjson and other streaming JSON responses', async () => {
+    // ndjson matches the textual regex but streams like SSE does; draining
+    // would hang the event and buffer the stream forever.
+    const endlessStream = new ReadableStream<Uint8Array>({ start: () => undefined });
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(endlessStream, {
+        status: 200,
+        headers: { 'content-type': 'application/x-ndjson' },
+      }),
+    );
+    const { sink, events } = createSink();
+    teardown = installNetworkCollector(sink, context, { captureBodies: true });
+
+    await fetch('/api/stream');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const event = lastNetworkEvent(events);
+    expect(event.status).toBe(200);
+    expect(event.responseBody).toBeNull();
+  });
+
+  it('stops reading a mislabeled endless stream at the size cap', async () => {
+    // A plain application/json content-type on an endless chunked stream:
+    // the bounded reader must cancel at the cap and ship the event instead
+    // of hanging forever (clone().text() would never resolve here).
+    const chunk = new TextEncoder().encode('x'.repeat(16 * 1024));
+    const stream = new ReadableStream<Uint8Array>({
+      pull: (controller) => {
+        controller.enqueue(chunk);
+      },
+    });
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(stream, { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    const { sink, events } = createSink();
+    teardown = installNetworkCollector(sink, context, { captureBodies: true });
+
+    await fetch('/api/mislabeled');
+    // Well under the 3s read deadline: the size cap alone must end the read.
+    await vi.waitFor(() => {
+      expect(events.length).toBeGreaterThan(0);
+    });
+
+    expect(lastNetworkEvent(events).status).toBe(200);
+  });
+
+  it('normalizes the opaque no-cors status 0 to null like the XHR path', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(Response.error());
+    const { sink, events } = createSink();
+    teardown = installNetworkCollector(sink, context);
+
+    await fetch('https://third-party.example/ping', { mode: 'no-cors' });
+
+    expect(lastNetworkEvent(events).status).toBeNull();
+  });
+
+  it('never breaks the host fetch when event recording throws', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response('ok', { status: 200 }));
+    const sink: EventSink = {
+      send: () => {
+        throw new Error('sink exploded');
+      },
+    };
+    teardown = installNetworkCollector(sink, context);
+
+    // The app's request succeeded; a recording bug must stay invisible.
+    const response = await fetch('/api/items');
+    expect(response.status).toBe(200);
+  });
 });
 
 /** Minimal XHR double; a fresh class per test keeps prototype patches isolated. */

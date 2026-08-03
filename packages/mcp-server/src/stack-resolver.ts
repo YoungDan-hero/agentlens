@@ -17,6 +17,9 @@ const SOURCE_MAPPING_URL = /\/\/[#@]\s*sourceMappingURL=(\S+)/g;
 
 const INLINE_MAP_PREFIX = 'data:application/json;base64,';
 
+/** Dev-server modules and their maps are per-file; 32M chars is generous. */
+const MAX_DOWNLOAD_CHARS = 32 * 1024 * 1024;
+
 export function parseStack(stack: string): RawFrame[] {
   const frames: RawFrame[] = [];
   for (const line of stack.split('\n')) {
@@ -127,7 +130,13 @@ export class StackResolver {
           this.cache.delete(oldest);
         }
       }
-      cached = this.loadMap(url).catch(() => null);
+      // "No sourcemap" (resolves null) is a stable fact and stays cached;
+      // a download failure (rejection) is transient — the dev server may
+      // just be restarting — so forget it and let a later stack retry.
+      cached = this.loadMap(url).catch(() => {
+        this.cache.delete(url);
+        return null;
+      });
       this.cache.set(url, cached);
     }
     return cached;
@@ -157,10 +166,22 @@ export class StackResolver {
   }
 
   private async download(url: string): Promise<string> {
-    const response = await fetch(url, { signal: AbortSignal.timeout(this.fetchTimeoutMs) });
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(this.fetchTimeoutMs),
+      // The loopback check above must be the final word: following a
+      // redirect from a loopback service to an external host would quietly
+      // reopen the SSRF door it closed.
+      redirect: 'error',
+    });
     if (!response.ok) {
       throw new Error(`Failed to download ${url}: ${String(response.status)}`);
     }
-    return response.text();
+    const text = await response.text();
+    if (text.length > MAX_DOWNLOAD_CHARS) {
+      throw new Error(
+        `Refusing to parse ${url}: response exceeds ${String(MAX_DOWNLOAD_CHARS)} chars`,
+      );
+    }
+    return text;
   }
 }

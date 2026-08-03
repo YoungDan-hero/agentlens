@@ -76,13 +76,21 @@ export function redactUrl(url: string): string {
 const MAX_REDACT_DEPTH = 32;
 
 function redactValue(value: unknown, depth: number): unknown {
-  if (depth > MAX_REDACT_DEPTH || typeof value !== 'object' || value === null) {
+  if (typeof value !== 'object' || value === null) {
     return value;
+  }
+  // Beyond the depth cap the walk stops — the subtree must be dropped, not
+  // passed through: an unredacted deep branch could carry a credential
+  // verbatim into the shipped body.
+  if (depth > MAX_REDACT_DEPTH) {
+    return '[MaxDepth]';
   }
   if (Array.isArray(value)) {
     return value.map((item) => redactValue(item, depth + 1));
   }
-  const result: Record<string, unknown> = {};
+  // Null prototype so a "__proto__" key is stored as a plain entry instead
+  // of triggering the prototype setter (which would drop the field).
+  const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const [key, item] of Object.entries(value)) {
     result[key] = isSensitiveKey(key) ? REDACTED : redactValue(item, depth + 1);
   }

@@ -23,7 +23,12 @@ function resolveRequestUrl(input: RequestInfo | URL): string {
   if (input instanceof URL) {
     return input.href;
   }
-  return input.url;
+  if (input instanceof Request) {
+    return input.url;
+  }
+  // Native fetch stringifies anything else; mirror it instead of producing
+  // undefined, which would blow up event building later.
+  return String(input);
 }
 
 function resolveMethod(input: RequestInfo | URL, init: RequestInit | undefined): string {
@@ -51,14 +56,58 @@ function serializeRequestBody(init: RequestInit | undefined): string | null {
 }
 
 const TEXTUAL_CONTENT_TYPE = /json|text|xml|urlencoded/i;
+// Streams never (or only eventually) end; draining them would hang the
+// event and buffer the stream in memory. Covers SSE plus the common
+// LLM/log streaming shapes that still match the textual regex above.
+const STREAMING_CONTENT_TYPE = /event-stream|ndjson|jsonl|stream\+json/i;
 
 function isReadableContentType(contentType: string): boolean {
-  // SSE streams never end: clone().text() would hang forever and buffer
-  // the stream in memory. They must never be drained.
-  if (/event-stream/i.test(contentType)) {
-    return false;
+  return !STREAMING_CONTENT_TYPE.test(contentType) && TEXTUAL_CONTENT_TYPE.test(contentType);
+}
+
+/** Cap on how long a body read may stall the event for that request. */
+const BODY_READ_TIMEOUT_MS = 3000;
+
+/**
+ * Drains the clone incrementally with a size cap and a deadline, so a
+ * mislabeled infinite stream (or a very slow one) can neither swallow the
+ * network event nor buffer unbounded data — `clone().text()` could do both.
+ */
+async function readBodyBounded(clone: Response): Promise<string | null> {
+  const body = clone.body;
+  if (!body) {
+    // No streaming API (older engines): the content checks above plus the
+    // content-length guard below are the only protection text() gets.
+    try {
+      return await clone.text();
+    } catch {
+      return null;
+    }
   }
-  return TEXTUAL_CONTENT_TYPE.test(contentType);
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  // Cancelling resolves any pending read() as done — the deadline also
+  // frees the clone's buffer for streams that trickle forever.
+  const deadline = setTimeout(() => void reader.cancel(), BODY_READ_TIMEOUT_MS);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      text += decoder.decode(value, { stream: true });
+      if (text.length > MAX_BODY_PARSE_BYTES) {
+        void reader.cancel();
+        break;
+      }
+    }
+  } catch {
+    // Aborted mid-read: report what arrived, if anything.
+  } finally {
+    clearTimeout(deadline);
+  }
+  return text === '' ? null : text;
 }
 
 async function readResponseBody(response: Response): Promise<string | null> {
@@ -71,12 +120,8 @@ async function readResponseBody(response: Response): Promise<string | null> {
   if (contentLength !== null && Number(contentLength) > MAX_BODY_PARSE_BYTES) {
     return `[body omitted: ${contentLength} bytes]`;
   }
-  try {
-    // Reading the clone leaves the caller's stream untouched.
-    return await response.clone().text();
-  } catch {
-    return null;
-  }
+  // Reading the clone leaves the caller's stream untouched.
+  return readBodyBounded(response.clone());
 }
 
 function installFetchInterceptor(
@@ -95,30 +140,39 @@ function installFetchInterceptor(
     const requestBody = captureBodies ? serializeRequestBody(init) : null;
 
     const record = (status: number | null, responseBody: string | null): void => {
-      sink.send(
-        buildNetworkEvent(context, {
-          transport: 'fetch',
-          method,
-          requestUrl,
-          status,
-          durationMs: Math.round(performance.now() - startedAt),
-          initiatorStack,
-          requestBody: requestBody === null ? null : sanitizeBody(requestBody),
-          responseBody: responseBody === null ? null : sanitizeBody(responseBody),
-        }),
-      );
+      // Isolated: a bug in event building must surface nowhere near the
+      // host app's network call — observing must never break the observed.
+      try {
+        sink.send(
+          buildNetworkEvent(context, {
+            transport: 'fetch',
+            method,
+            requestUrl,
+            status,
+            durationMs: Math.round(performance.now() - startedAt),
+            initiatorStack,
+            requestBody: requestBody === null ? null : sanitizeBody(requestBody),
+            responseBody: responseBody === null ? null : sanitizeBody(responseBody),
+          }),
+        );
+      } catch {
+        // Swallowed by design; the app's response/error is what matters.
+      }
     };
 
     try {
       const response = await originalFetch.call(globalThis, input, init);
+      // Opaque no-cors responses report status 0 — no HTTP status is
+      // readable, which is what null means (mirrors the XHR path).
+      const status = response.status === 0 ? null : response.status;
       if (captureBodies) {
         // Body reading is async; the caller gets the response immediately
         // and the event ships once the clone has been drained.
         void readResponseBody(response).then((body) => {
-          record(response.status, body);
+          record(status, body);
         });
       } else {
-        record(response.status, null);
+        record(status, null);
       }
       return response;
     } catch (error) {
@@ -155,10 +209,6 @@ function installXhrInterceptor(
     username?: string | null,
     password?: string | null,
   ): void {
-    pending.set(this, {
-      method: method.toUpperCase(),
-      url: url instanceof URL ? url.href : url,
-    });
     // The 2-arg overload must stay 2-arg: passing `undefined` as `async`
     // would coerce to `false` and silently turn the request synchronous.
     // (.call resolves against the 5-arg overload only, hence the narrowing.)
@@ -169,6 +219,12 @@ function installXhrInterceptor(
     } else {
       originalOpen.call(this, method, url, async, username, password);
     }
+    // Only after the native open succeeded: an invalid method throws above,
+    // and a stale pending entry must not survive it.
+    pending.set(this, {
+      method: method.toUpperCase(),
+      url: url instanceof URL ? url.href : url,
+    });
   };
 
   proto.send = function (this: XMLHttpRequest, ...args: Parameters<XMLHttpRequest['send']>) {
@@ -335,7 +391,10 @@ export function installNetworkCollector(
   options: NetworkCollectorOptions = {},
 ): () => void {
   const captureBodies = options.captureBodies ?? false;
-  const teardowns = [installFetchInterceptor(sink, context, captureBodies)];
+  const teardowns: (() => void)[] = [];
+  if (typeof fetch !== 'undefined') {
+    teardowns.push(installFetchInterceptor(sink, context, captureBodies));
+  }
   if (typeof XMLHttpRequest !== 'undefined') {
     teardowns.push(installXhrInterceptor(sink, context, captureBodies));
   }

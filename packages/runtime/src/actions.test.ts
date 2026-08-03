@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import type { ActionRequest, ErrorEvent, NetworkEvent } from '@agentlensjs/shared';
+import type {
+  ActionRequest,
+  ActionSequenceRequest,
+  ActionStep,
+  ErrorEvent,
+  NetworkEvent,
+} from '@agentlensjs/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { ActionExecutor } from './actions';
@@ -21,6 +27,10 @@ function makeExecutor(overrides: Partial<Parameters<typeof createActionExecutor>
 
 function request(partial: Partial<ActionRequest> & Pick<ActionRequest, 'action'>): ActionRequest {
   return { kind: 'action-request', requestId: 'r1', ...partial };
+}
+
+function sequence(steps: ActionStep[]): ActionSequenceRequest {
+  return { kind: 'action-sequence-request', requestId: 'seq1', steps };
 }
 
 function makeError(): ErrorEvent {
@@ -182,6 +192,19 @@ describe('target resolution', () => {
     expect(
       (await exec.handle(request({ action: 'click', target: { selector: '#off' } }))).error,
     ).toContain('disabled');
+  });
+
+  it('refuses elements inside a display:none ancestor', async () => {
+    // display does not inherit: the button's own computed style is fine,
+    // only a walk up the ancestor chain reveals it is not rendered.
+    document.body.innerHTML = '<div style="display:none"><button id="collapsed">A</button></div>';
+    const exec = makeExecutor();
+
+    const result = await exec.handle(
+      request({ action: 'click', target: { selector: '#collapsed' } }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('hidden');
   });
 });
 
@@ -434,5 +457,208 @@ describe('settle and effects', () => {
     expect(result.ok).toBe(true);
     expect(result.settleTimedOut).toBe(true);
     expect(result.settledAfterMs).toBeGreaterThanOrEqual(300);
+  });
+});
+
+describe('action sequences', () => {
+  it('runs steps in order and aggregates effects across them', async () => {
+    document.body.innerHTML =
+      '<input id="name" type="text" /><button id="submit">Submit</button><p id="out"></p>';
+    const exec = makeExecutor();
+    const order: string[] = [];
+    document.getElementById('name')?.addEventListener('input', () => order.push('input'));
+    document.getElementById('submit')?.addEventListener('click', () => {
+      order.push('click');
+      exec.noteLocalEvent(makeError());
+    });
+
+    const result = await exec.handleSequence(
+      sequence([
+        { action: 'input', target: { selector: '#name' }, value: 'Ada' },
+        { action: 'click', target: { selector: '#submit' } },
+      ]),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.stoppedAt).toBeNull();
+    expect(result.stopReason).toBeNull();
+    expect(result.stepResults).toHaveLength(2);
+    expect(result.stepResults.every((step) => step.ok)).toBe(true);
+    expect(result.totalEffects).toEqual({ errors: 1, failedRequests: 0, consoleErrors: 0 });
+    expect(order).toEqual(['input', 'click']);
+    expect((document.getElementById('name') as HTMLInputElement).value).toBe('Ada');
+    expect(result.finalUrl).toContain('localhost');
+  });
+
+  it('stops at the first failing step and reports the break point', async () => {
+    document.body.innerHTML = '<button id="go">Go</button>';
+    const exec = makeExecutor();
+
+    const result = await exec.handleSequence(
+      sequence([
+        { action: 'click', target: { selector: '#go' } },
+        { action: 'click', target: { selector: '#missing' } },
+        { action: 'click', target: { selector: '#go' } },
+      ]),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.stoppedAt).toBe(1);
+    expect(result.stopReason).toContain('no element matches');
+    // The failing step's outcome is included; the third step never ran.
+    expect(result.stepResults).toHaveLength(2);
+    expect(result.stepResults[0]?.ok).toBe(true);
+    expect(result.stepResults[1]?.ok).toBe(false);
+  });
+
+  it('waitFor rides out async UI: waits for an element to appear', async () => {
+    document.body.innerHTML = '<div id="host"></div>';
+    const exec = makeExecutor();
+    // The button appears 150ms later, as if rendered after a fetch.
+    setTimeout(() => {
+      const button = document.createElement('button');
+      button.id = 'late';
+      button.textContent = 'Late';
+      document.getElementById('host')?.append(button);
+    }, 150);
+
+    const result = await exec.handleSequence(
+      sequence([
+        { action: 'click', target: { selector: '#late' }, waitFor: { selector: '#late' } },
+      ]),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.stepResults[0]?.target?.id).toBe('late');
+  });
+
+  it('waitFor timeout stops the sequence with an actionable reason', async () => {
+    const exec = makeExecutor();
+
+    const result = await exec.handleSequence(
+      sequence([
+        {
+          action: 'click',
+          target: { selector: '#never' },
+          waitFor: { selector: '#never', timeoutMs: 150 },
+        },
+      ]),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.stoppedAt).toBe(0);
+    expect(result.stopReason).toContain('waitFor timed out');
+    expect(result.stepResults[0]?.error).toContain('never became visible');
+  });
+
+  it('waitFor hidden resolves once the element disappears', async () => {
+    document.body.innerHTML = '<div id="spinner">loading…</div><button id="go">Go</button>';
+    const exec = makeExecutor();
+    setTimeout(() => {
+      document.getElementById('spinner')?.remove();
+    }, 120);
+
+    const result = await exec.handleSequence(
+      sequence([
+        {
+          action: 'click',
+          target: { selector: '#go' },
+          waitFor: { selector: '#spinner', state: 'hidden' },
+        },
+      ]),
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses navigate anywhere but the final step', async () => {
+    document.body.innerHTML = '<button id="go">Go</button>';
+    const exec = makeExecutor();
+
+    const result = await exec.handleSequence(
+      sequence([
+        { action: 'navigate', url: '/#/somewhere' },
+        { action: 'click', target: { selector: '#go' } },
+      ]),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.stopReason).toContain('only allowed as the final step');
+    expect(result.stepResults).toHaveLength(0);
+  });
+
+  it('refuses oversized and empty sequences outright', async () => {
+    const exec = makeExecutor();
+
+    const oversized = await exec.handleSequence(
+      sequence(Array.from({ length: 21 }, (): ActionStep => ({ action: 'scroll', x: 0, y: 0 }))),
+    );
+    expect(oversized.ok).toBe(false);
+    expect(oversized.stopReason).toContain('too many steps');
+
+    const empty = await exec.handleSequence(sequence([]));
+    expect(empty.ok).toBe(false);
+    expect(empty.stopReason).toContain('no steps');
+  });
+
+  it('aborts between steps when the user takes over', async () => {
+    document.body.innerHTML = '<button id="go">Go</button>';
+    const exec = makeExecutor({ userActivityWindowMs: 5000 });
+    // The user grabs the mouse while step 0 is settling.
+    document.getElementById('go')?.addEventListener('click', () => {
+      exec.noteUserActivity();
+    });
+
+    const result = await exec.handleSequence(
+      sequence([
+        { action: 'click', target: { selector: '#go' } },
+        { action: 'click', target: { selector: '#go' } },
+      ]),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.stoppedAt).toBe(1);
+    expect(result.stopReason).toContain('human input wins');
+    // Step 0 completed and is reported; step 1 was never attempted.
+    expect(result.stepResults).toHaveLength(1);
+    expect(result.stepResults[0]?.ok).toBe(true);
+  });
+
+  it('aborts when the user grabs the page during a waitFor poll', async () => {
+    document.body.innerHTML = '<div id="host"></div>';
+    const exec = makeExecutor({ userActivityWindowMs: 5000 });
+    // The user starts typing while the sequence is still waiting for the
+    // late element; the element then appears, but the step must not run.
+    setTimeout(() => {
+      exec.noteUserActivity();
+    }, 50);
+    setTimeout(() => {
+      const button = document.createElement('button');
+      button.id = 'late';
+      document.getElementById('host')?.append(button);
+    }, 150);
+
+    const result = await exec.handleSequence(
+      sequence([
+        { action: 'click', target: { selector: '#late' }, waitFor: { selector: '#late' } },
+      ]),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.stoppedAt).toBe(0);
+    expect(result.stopReason).toContain('human input wins');
+    expect(result.stepResults).toHaveLength(0);
+    expect(document.getElementById('late')).not.toBeNull();
+  });
+
+  it('shares the single-action concurrency lock', async () => {
+    document.body.innerHTML = '<button id="go">Go</button>';
+    const exec = makeExecutor();
+
+    const first = exec.handleSequence(sequence([{ action: 'click', target: { selector: '#go' } }]));
+    const second = await exec.handle(request({ action: 'click', target: { selector: '#go' } }));
+    expect(second.ok).toBe(false);
+    expect(second.error).toContain('one at a time');
+    await first;
   });
 });

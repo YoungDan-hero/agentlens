@@ -41,23 +41,28 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 **Browser action channel** (opt-in):
 
 - **Agent-driven testing** — with `allowActions: true`, the agent can click, type, pick select options, scroll and navigate (same origin only) inside your real dev session — no separate browser, no cold start, with every AgentLens signal available for assertions
-- **Human input wins** — actions are refused while you are actively using the page; the agent simply retries later
+- **Batch sequences** — `perform_actions` runs up to 20 steps in one round-trip, each with an optional local wait condition (element visible / attached / hidden), so a fill-the-form-and-submit flow costs one agent call instead of five
+- **One-command replay** — `replay_error_path` turns the interactions that preceded an error into a script and re-runs it, comparing the error fingerprint's occurrence count before and after: the fastest possible "did my fix work?" answer
+- **Human input wins** — actions are refused (and running sequences aborted) while you are actively using the page; the agent simply retries later
 - **Audit trail** — every synthetic interaction is captured with a `synthetic: true` marker, and touched elements flash a highlight outline
 
-**Ten MCP tools** for the agent:
+**Thirteen MCP tools** for the agent:
 
-| Tool                       | What it answers                                                             |
-| -------------------------- | --------------------------------------------------------------------------- |
-| `get_page_health`          | "Is the page healthy right now?" — errors, failed requests, activity        |
-| `get_error_context`        | "Why did this error happen?" — one-call root-cause bundle                   |
-| `get_recent_events`        | "Show me the errors / logs / requests" — filterable drill-down              |
-| `get_interaction_timeline` | "What did the user do to cause this?" — cause-and-effect grouping           |
-| `get_layout_snapshot`      | "What does the page look like?" — structured box tree, no screenshot        |
-| `get_performance`          | "Why is the page slow?" — Web Vitals with ratings, long-task load           |
-| `perform_action`           | "Click that button / fill that form for me" — drives the live page (opt-in) |
-| `wait_for_idle`            | "Has the app finished reacting?" — blocks until the event stream settles    |
-| `verify_fix`               | "Did my fix work?" — waits for HMR, watches whether the error recurs        |
-| `list_sessions`            | "Which tabs / reloads are connected?" — session management                  |
+| Tool                       | What it answers                                                                   |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| `get_page_health`          | "Is the page healthy right now?" — errors, failed requests, activity              |
+| `get_error_context`        | "Why did this error happen?" — one-call root-cause bundle                         |
+| `get_recent_events`        | "Show me the errors / logs / requests" — filterable by type, time and source file |
+| `get_interaction_timeline` | "What did the user do to cause this?" — cause-and-effect grouping                 |
+| `get_layout_snapshot`      | "What does the page look like?" — structured box tree, no screenshot              |
+| `find_elements_by_source`  | "What does src/App.vue render right now?" — reverse source lookup                 |
+| `get_performance`          | "Why is the page slow?" — Web Vitals with ratings, long-task load                 |
+| `perform_action`           | "Click that button / fill that form for me" — drives the live page (opt-in)       |
+| `perform_actions`          | "Run these five steps" — batch sequence with local wait conditions (opt-in)       |
+| `replay_error_path`        | "Reproduce that error" — replays the path that led to it, checks recurrence       |
+| `wait_for_idle`            | "Has the app finished reacting?" — blocks until the event stream settles          |
+| `verify_fix`               | "Did my fix work?" — waits for HMR, watches whether the error recurs              |
+| `list_sessions`            | "Which tabs / reloads are connected?" — sessions with live focus state            |
 
 ## Use cases
 
@@ -68,6 +73,10 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 - **Performance regressions** — `get_performance` reports the current Web Vitals with their web.dev ratings and the long-task pressure, so "the page feels slow" turns into "INP is 620 ms (poor) and there are 14 long tasks totalling 2.1 s".
 - **Closing the fix loop** — after editing, the agent calls `verify_fix` with the error's fingerprint; the daemon waits for the HMR update to reach the browser and reports whether the error recurred.
 - **In-session automated testing** — with actions enabled, the agent reproduces the bug itself: `perform_action` clicks the button that crashed (located by `data-agentlens-source`, stable across refactors), `wait_for_idle` lets the app settle, and the action result reports the errors and failed requests it triggered — a full regression check without leaving your dev session.
+- **Scripted flows in one call** — `perform_actions` fills the form, waits for the conditional field to appear (`waitFor`), and submits — one agent round-trip instead of one per step, with the break point (`stoppedAt`, `stopReason`) reported if anything fails along the way.
+- **Fix verification by replay** — `replay_error_path` derives the reproduction script from the interactions that preceded the error (dry run first, so you can review and fill in typed values), executes it, and answers with `errorRecurred: true/false` by comparing fingerprint occurrence counts.
+- **Editing a component? See its runtime output** — `find_elements_by_source` lists the elements a source file renders on the live page, and `get_recent_events` with `source: "src/Checkout.vue"` returns just the errors, interactions and requests attributed to that file.
+- **Multiple tabs open?** — the runtime reports focus and visibility, the daemon targets snapshots and actions at the page you are actually looking at, and `list_sessions` shows the live focus state per session.
 
 ## Getting started
 
@@ -109,6 +118,7 @@ agentlens({
   captureBodies: false, // opt in to capture request/response bodies (redacted)
   redactKeys: ['idCard', 'mobile'], // project-specific sensitive keys, on top of the built-ins
   allowActions: false, // opt in to let the agent drive the page via perform_action
+  isCustomElement: (tag) => tag.startsWith('my-'), // mirror @vitejs/plugin-vue so custom elements get attributed too
 });
 ```
 
@@ -180,7 +190,7 @@ init({
 
 One caveat inherent to this pattern: collectors only exist once the dynamically imported chunk has loaded, so signals fired synchronously during application startup are not captured. This exact integration is exercised by an automated smoke test in [`examples/webpack-demo`](./examples/webpack-demo).
 
-Everything above works with manual setup — errors, console, network, performance, interactions, layout snapshots, the action channel and all ten MCP tools — with two degradations:
+Everything above works with manual setup — errors, console, network, performance, interactions, layout snapshots, the action channel and all thirteen MCP tools — with two degradations (additionally, `find_elements_by_source` and the `source` locators depend on the attribution attribute, so fall back to selector/text locators):
 
 - **Source attribution** — `data-agentlens-source` is stamped by the Vite plugin's template/JSX transform, so without it, interactions and layout boxes describe elements by tag / id / class instead of `file:line`.
 - **`verify_fix`** — the daemon accepts either an HMR signal or a full page reload as proof that new code reached the browser. Reloads work out of the box; to get the faster HMR path, wire your bundler's hot API to `reportHmrUpdate`:
@@ -198,6 +208,34 @@ if (process.env.NODE_ENV === 'development') {
 ```
 
 For Next.js, run the snippet on the client only — e.g. in [`instrumentation-client.ts`](https://nextjs.org/docs/app/api-reference/file-conventions/instrumentation-client) (Next 15.3+) or a `'use client'` component mounted in the root layout.
+
+### MCP tools in detail
+
+**`get_page_health`** — the tool an agent should call first. Returns a health overview of the last 5 minutes: deduplicated error count, total occurrences including folded repeats, failed request count, and last-activity time. Scopes to the most recently active session by default; pass `sessionId` to pick one.
+
+**`get_recent_events`** — the drill-down query. Filters by `type` (error / console / network / lifecycle / interaction / performance), `sessionId`, `sinceMs` (timestamp lower bound), `limit` (default 50, max 200), and `source` (source-file filter: `src/App.vue`, or exact-line `src/App.vue:42`; matches interactions on elements from that file, errors whose resolved stack passes through it, and requests initiated by it). Returns newest-first events. Error events carry a `fingerprint` and sourcemap-resolved `frames`.
+
+**`get_error_context`** — the root-cause bundle. Pass an error `fingerprint` or event `id` (defaults to the latest error) and get, in one call: the folded error record (with resolved stack), the user interactions preceding its last occurrence (with element source attribution, up to 5), network requests and console warnings/errors in the same window (up to 10 each), and the session's Web Vitals profile. `lookbackMs` controls the lookback window (default 15 s). The preferred entry point for diagnosing a single error instead of manually correlating across tools.
+
+**`get_interaction_timeline`** — the causal view. Groups user interactions (click / input / submit, each with element source attribution) with the errors, requests, and logs that follow them. `windowMs` controls the attribution window (default 3000 ms); the window is cut short by the next interaction. Events belonging to no interaction land in `background`.
+
+**`get_layout_snapshot`** — a live layout snapshot. Asks the browser for a structured box tree: each visible element's tag, viewport rect, visibility, overflow state, direct text, and its `data-agentlens-source` attribution. Node budget defaults to 800; `truncated` marks overflow.
+
+**`get_performance`** — the performance profile. Returns the latest reading per Web Vital in the current session (FCP / LCP / CLS / INP / TTFB, each with the web.dev rating good / needs-improvement / poor) plus a long-task summary (count, total duration, worst one, recent list). Good for "why is the page slow" and for re-checking metrics after an optimization.
+
+**`perform_action`** — the browser action channel (requires the app to opt in with `allowActions: true`). Lets the agent drive the page inside the user's real dev session: `click`, `input` (compatible with React controlled components and Vue v-model), `select`, `scroll`, and same-origin `navigate`. Locate elements by one of `source` (the `file:line` value of `data-agentlens-source`, most stable across refactors), `selector` (CSS), or `text` (visible text, deepest match); disambiguate multiple matches with `nth`. After dispatch the runtime waits for the page to settle and returns the element actually hit, the settle time, and the counts of errors / failed requests / console errors the action triggered. Safety: actions are refused while the user has produced real input within the last 1.5 s (just retry later), only one action runs at a time, cross-origin navigation is always refused, every synthetic interaction is stored with a `synthetic: true` audit marker, and the acted-on element flashes a highlight outline.
+
+**`perform_actions`** — batch action sequences (also requires `allowActions: true`). Executes up to 20 steps in order within one round-trip; each step may declare a local `waitFor` condition (`source` / `selector` / `text` locator + `visible` / `attached` / `hidden` state + `timeoutMs`) that the runtime polls inside the browser, so async UI (options still loading, fields appearing on change) no longer costs an agent round-trip. Stops at the first failure — and immediately when the user starts interacting — returning the break point (`stoppedAt`), the reason (`stopReason`), per-step results, accumulated effects, and the final URL; the agent replans from the break point. `navigate` is only allowed as the last step (a full page load destroys the executing page).
+
+**`find_elements_by_source`** — the reverse source query. Pass a source path (`src/App.vue`, or exact `src/App.vue:42`) and get every element that file currently renders on the page (tag, id, visible text, visibility, exact `file:line` attribution), capped at 100 with `truncated`. Use it to see what a component you just edited looks like at runtime, or to find an element for `perform_action`.
+
+**`replay_error_path`** — one-call error replay. Derives an action-sequence script from the real human interactions before an error (agent-synthetic interactions are filtered out): clicks locate by `source` (stable across refactors); input steps are marked `needsValue` because **input values are never captured**, so the caller supplies them. Dry run by default, returning the script for review; pass `dryRun: false` (with `values: {"0": "text"}` filling the inputs) to actually execute. Afterwards it compares the error fingerprint's occurrence count and returns `errorRecurred` — run it once after a fix to know directly whether the error came back.
+
+**`wait_for_idle`** — waits for the app to go quiet. Blocks until the session's event stream has been silent for `quietMs` (default 1 s) or `timeoutMs` (default 10 s) elapses. Call it after `perform_action` and before asserting page state, so you never query while the app is still reacting.
+
+**`verify_fix`** — the fix-verification loop. Pass an error's `fingerprint` (from `get_recent_events`); the tool works in two phases: first it waits for new code to reach the browser (HMR or full reload, up to `timeoutMs`, default 10 s), then it watches for the fingerprint to recur within a `quietWindowMs` (default 3 s) quiet window. Note: errors triggered only by user interaction need that interaction re-triggered for full confirmation — the result says so explicitly, and the agent can now re-trigger it directly with `perform_action`.
+
+**`list_sessions`** — lists every known session (one per page load / tab), ordered by recent activity. Sessions still connected carry live focus state: `connected`, `visible` (page visible), `focused` (the page the user is looking at). The runtime reports visibility and focus changes continuously, and the daemon prefers the focused page when picking the target session for snapshots and actions — with several tabs open, the agent drives the one in front of you. Pass `sessionId` to scope explicitly.
 
 ## Packages
 
@@ -230,6 +268,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow.
 - [x] M4 — first-class Vue support: SFC template source attribution, Vue demo in the E2E matrix
 - [x] M5a — one-call error root-cause bundle (`get_error_context`)
 - [x] M5b — browser action channel: agent-driven in-session automated testing (opt-in)
+- [x] M6 — fix-verification engine: session focus signal, reverse source lookup (`find_elements_by_source`, `source` event filter), batch sequences with wait conditions (`perform_actions`), one-command error replay (`replay_error_path`)
 
 ## Privacy & data safety
 
@@ -242,7 +281,7 @@ AgentLens is a dev-time tool designed so that sensitive data cannot leave your m
 - **Bodies are opt-in and redacted** — request/response bodies ship only with `captureBodies: true`, and even then sensitive fields (`password`, `token`, `secret`, `authorization`, ...) are replaced with `[REDACTED]` inside the browser, before anything leaves the page. Add project-specific keys (e.g. `idCard`) with the `redactKeys` option. Bodies are size-capped (4 KB).
 - **URLs are redacted by default** — sensitive query parameter values (`?token=...`, `?apiKey=...`) are stripped on every network event.
 - **Form values are never captured** — interaction events record the element, not what was typed into it.
-- **The action channel is off by default** — `perform_action` only works when the app opts in with `allowActions: true`. Even then: actions are refused while you are actively interacting (human input always wins), navigation is confined to the app's own origin, and every synthetic interaction lands in the store with a `synthetic: true` audit marker.
+- **The action channel is off by default** — `perform_action`, `perform_actions` and `replay_error_path` only work when the app opts in with `allowActions: true`. Even then: actions are refused (and running sequences aborted) while you are actively interacting (human input always wins), navigation is confined to the app's own origin, and every synthetic interaction lands in the store with a `synthetic: true` audit marker. Typed input values are never captured, so replay scripts ask you (or the agent) to supply them explicitly.
 
 Found a vulnerability? Please report it privately — see [SECURITY.md](./SECURITY.md).
 

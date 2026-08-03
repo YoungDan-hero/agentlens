@@ -174,6 +174,98 @@ export interface SnapshotResponse {
   truncated: boolean;
 }
 
+/**
+ * Browser -> daemon: reports whether the page is the one the user is
+ * currently looking at. The daemon prefers focused, visible sessions when
+ * choosing which page to snapshot or act on, so agent actions land on the
+ * page in front of the user instead of a background tab.
+ */
+export interface FocusUpdate {
+  kind: 'focus-update';
+  sessionId: string;
+  /** `document.visibilityState === 'visible'`. */
+  visible: boolean;
+  /** `document.hasFocus()` — false when the user is in another window. */
+  focused: boolean;
+  url: string;
+  at: number;
+}
+
+export function isFocusUpdate(value: unknown): value is FocusUpdate {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Partial<FocusUpdate>;
+  return (
+    candidate.kind === 'focus-update' &&
+    typeof candidate.sessionId === 'string' &&
+    typeof candidate.visible === 'boolean' &&
+    typeof candidate.focused === 'boolean' &&
+    typeof candidate.url === 'string' &&
+    typeof candidate.at === 'number'
+  );
+}
+
+/** Daemon -> browser: asks which elements a source file renders right now. */
+export interface SourceQueryRequest {
+  kind: 'source-query-request';
+  requestId: string;
+  /** File path (`src/App.vue`) or exact attribution (`src/App.vue:42`). */
+  source: string;
+}
+
+/** Compact description of one element found by a source query. */
+export interface SourceElementSummary {
+  tag: string;
+  id: string | null;
+  /** Visible text, trimmed and truncated. */
+  text: string | null;
+  /** False when hidden via display/visibility. */
+  visible: boolean;
+  /** The element's exact `data-agentlens-source` value (`file:line`). */
+  source: string;
+}
+
+/** Browser -> daemon: the elements currently rendered by the queried source. */
+export interface SourceQueryResponse {
+  kind: 'source-query-response';
+  requestId: string;
+  sessionId: string;
+  url: string;
+  capturedAt: number;
+  elements: SourceElementSummary[];
+  /** True when the element budget was exhausted. */
+  truncated: boolean;
+}
+
+export function isSourceQueryRequest(value: unknown): value is SourceQueryRequest {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Partial<SourceQueryRequest>;
+  return (
+    candidate.kind === 'source-query-request' &&
+    typeof candidate.requestId === 'string' &&
+    typeof candidate.source === 'string'
+  );
+}
+
+export function isSourceQueryResponse(value: unknown): value is SourceQueryResponse {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Partial<SourceQueryResponse>;
+  return (
+    candidate.kind === 'source-query-response' &&
+    typeof candidate.requestId === 'string' &&
+    typeof candidate.sessionId === 'string' &&
+    typeof candidate.url === 'string' &&
+    typeof candidate.capturedAt === 'number' &&
+    typeof candidate.truncated === 'boolean' &&
+    Array.isArray(candidate.elements)
+  );
+}
+
 /** Kinds of page actions the daemon can ask the runtime to perform. */
 export type ActionType = 'click' | 'input' | 'select' | 'scroll' | 'navigate';
 
@@ -216,11 +308,8 @@ export interface ActionEffects {
   consoleErrors: number;
 }
 
-/** Browser -> daemon: outcome of one action request. */
-export interface ActionResult {
-  kind: 'action-result';
-  requestId: string;
-  sessionId: string;
+/** Outcome of one executed action, shared by single and sequence results. */
+export interface ActionOutcome {
   ok: boolean;
   /** Failure reason; null on success. */
   error: string | null;
@@ -231,6 +320,80 @@ export interface ActionResult {
   settledAfterMs: number;
   /** True when the settle wait hit its ceiling instead of going quiet. */
   settleTimedOut: boolean;
+}
+
+/** Browser -> daemon: outcome of one action request. */
+export interface ActionResult extends ActionOutcome {
+  kind: 'action-result';
+  requestId: string;
+  sessionId: string;
+}
+
+/**
+ * A condition a sequence step waits for before executing — how scripted
+ * sequences ride out async UI (options loading, conditional fields
+ * appearing) without a round-trip to the agent.
+ */
+export interface WaitCondition {
+  /** Locate awaited element(s) by `data-agentlens-source` value. */
+  source?: string;
+  /** Locate by CSS selector. */
+  selector?: string;
+  /** Locate by visible text (substring). */
+  text?: string;
+  /**
+   * `visible` (default): at least one match is rendered and not hidden.
+   * `attached`: at least one match exists in the DOM, hidden or not.
+   * `hidden`: no match exists, or every match is hidden.
+   */
+  state?: 'visible' | 'attached' | 'hidden';
+  /** Give up after this long. @default 5000 */
+  timeoutMs?: number;
+}
+
+/** One step of an action sequence. */
+export interface ActionStep {
+  action: ActionType;
+  target?: ActionTarget;
+  value?: string;
+  url?: string;
+  x?: number;
+  y?: number;
+  /** Condition to await before executing this step. */
+  waitFor?: WaitCondition;
+}
+
+/** Hard cap on sequence length, enforced on both ends of the wire. */
+export const MAX_SEQUENCE_STEPS = 20;
+
+/** Daemon -> browser: asks the runtime to run several actions in order. */
+export interface ActionSequenceRequest {
+  kind: 'action-sequence-request';
+  requestId: string;
+  steps: ActionStep[];
+}
+
+/** Browser -> daemon: outcome of a sequence, including the break point. */
+export interface ActionSequenceResult {
+  kind: 'action-sequence-result';
+  requestId: string;
+  sessionId: string;
+  /** True when every step ran and succeeded. */
+  ok: boolean;
+  /**
+   * Index of the step the sequence stopped at. Null when all steps ran —
+   * but also for structural refusals (empty/oversized sequence, misplaced
+   * navigate) that never start; those carry a stopReason and ok: false.
+   */
+  stoppedAt: number | null;
+  /** Why the sequence stopped early; null when all steps ran. */
+  stopReason: string | null;
+  /** Per-step outcomes for the steps that were attempted. */
+  stepResults: ActionOutcome[];
+  /** Effects accumulated across all attempted steps. */
+  totalEffects: ActionEffects;
+  /** Page URL (redacted) after the sequence finished or stopped. */
+  finalUrl: string;
 }
 
 export function isActionRequest(value: unknown): value is ActionRequest {
@@ -252,6 +415,7 @@ export function isActionResult(value: unknown): value is ActionResult {
   const candidate = value as Partial<ActionResult>;
   // Read untyped: the wire value may carry anything, including null.
   const effects: unknown = (value as { effects?: unknown }).effects;
+  const target: unknown = (value as { target?: unknown }).target;
   return (
     candidate.kind === 'action-result' &&
     typeof candidate.requestId === 'string' &&
@@ -260,8 +424,41 @@ export function isActionResult(value: unknown): value is ActionResult {
     typeof candidate.settledAfterMs === 'number' &&
     typeof candidate.settleTimedOut === 'boolean' &&
     (candidate.error === null || typeof candidate.error === 'string') &&
+    (target === null || typeof target === 'object') &&
     typeof effects === 'object' &&
     effects !== null
+  );
+}
+
+export function isActionSequenceRequest(value: unknown): value is ActionSequenceRequest {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Partial<ActionSequenceRequest>;
+  return (
+    candidate.kind === 'action-sequence-request' &&
+    typeof candidate.requestId === 'string' &&
+    Array.isArray(candidate.steps)
+  );
+}
+
+export function isActionSequenceResult(value: unknown): value is ActionSequenceResult {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Partial<ActionSequenceResult>;
+  const totalEffects: unknown = (value as { totalEffects?: unknown }).totalEffects;
+  return (
+    candidate.kind === 'action-sequence-result' &&
+    typeof candidate.requestId === 'string' &&
+    typeof candidate.sessionId === 'string' &&
+    typeof candidate.ok === 'boolean' &&
+    (candidate.stoppedAt === null || typeof candidate.stoppedAt === 'number') &&
+    (candidate.stopReason === null || typeof candidate.stopReason === 'string') &&
+    Array.isArray(candidate.stepResults) &&
+    typeof candidate.finalUrl === 'string' &&
+    typeof totalEffects === 'object' &&
+    totalEffects !== null
   );
 }
 

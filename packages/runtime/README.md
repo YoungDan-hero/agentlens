@@ -9,7 +9,9 @@ In-browser collector SDK for AgentLens. Captures runtime signals during developm
 - **Interactions** — clicks, debounced inputs and form submits, attributed to the source line that rendered the element
 - **Lifecycle** — page load, SPA route changes (History API), HMR updates and unload
 - **Layout snapshots** — answers daemon requests with a structured box-model tree of the page
-- **Action channel (opt-in)** — executes daemon-requested page actions (click, type, select, scroll, same-origin navigate) with synthetic DOM events compatible with React state tracking and Vue v-model; refuses to act while the user is interacting, and marks every synthetic interaction with `synthetic: true` for auditability
+- **Focus state** — reports page visibility and focus on every (re)connect and change, so the daemon targets snapshots and actions at the page the user is actually looking at
+- **Reverse source lookup** — answers daemon queries for the elements a given source file renders right now (via the `data-agentlens-source` attribution)
+- **Action channel (opt-in)** — executes daemon-requested page actions (click, type, select, scroll, same-origin navigate) with synthetic DOM events compatible with React state tracking and Vue v-model; also runs batched action sequences (up to 20 steps, each with an optional locally-polled `waitFor` condition), stopping at the first failure or as soon as the user starts interacting; marks every synthetic interaction with `synthetic: true` for auditability
 
 Events are micro-batched over a single WebSocket with bounded buffering and exponential-backoff reconnection. Pending events are flushed on page hide so the last moments of a session are not lost.
 

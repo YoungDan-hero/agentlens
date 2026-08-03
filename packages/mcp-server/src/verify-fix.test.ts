@@ -125,4 +125,69 @@ describe('verifyFix', () => {
     expect(result.occurrencesBefore).toBe(1);
     expect(result.occurrencesAfter).toBe(2);
   });
+
+  it('sees a code update that landed before the tool was called', async () => {
+    // The primary workflow: agent edits the file, Vite applies HMR within
+    // milliseconds, and only then does the agent invoke verify_fix. The
+    // update is already in the store when the tool starts.
+    const store = new EventStore();
+    const fingerprint = storedFingerprint(store, makeError({ timestamp: Date.now() - 500 }));
+    store.add(makeHmrUpdate(Date.now() - 100));
+
+    const result = asResult(await verifyFix(store, fingerprint, FAST));
+    expect(result.codeUpdateApplied).toBe(true);
+    expect(result.verified).toBe(true);
+  });
+
+  it('ignores code updates from a different origin (second dev server)', async () => {
+    const store = new EventStore();
+    const fingerprint = storedFingerprint(store, makeError({ timestamp: Date.now() - 500 }));
+    // Another project's HMR on another port must not read as "fix arrived".
+    store.add({
+      ...makeHmrUpdate(Date.now() - 100),
+      url: 'http://localhost:4000/',
+      sessionId: 'other-app',
+    });
+
+    const result = asResult(await verifyFix(store, fingerprint, FAST));
+    expect(result.codeUpdateApplied).toBe(false);
+    expect(result.note).toContain('No code update');
+  });
+
+  it('hints when the only update predates the error\u2019s latest occurrence', async () => {
+    // Fix applied → error recurred after it → agent calls the tool. There
+    // is no update newer than the recurrence, but the stale one deserves a
+    // pointed note: if that was the fix, it did not take.
+    const store = new EventStore();
+    const now = Date.now();
+    store.add(makeHmrUpdate(now - 300));
+    const fingerprint = storedFingerprint(store, makeError({ timestamp: now - 100 }));
+
+    const result = asResult(await verifyFix(store, fingerprint, FAST));
+    expect(result.codeUpdateApplied).toBe(false);
+    expect(result.note).toContain('already recurred');
+  });
+
+  it('counts a recurrence that fires immediately after the update lands', async () => {
+    // The recurrence timestamp sits between the HMR event and the poll that
+    // discovers it; judging against poll wall-clock time would misread it
+    // as a stale pre-update occurrence.
+    const store = new EventStore();
+    const fingerprint = storedFingerprint(store, makeError());
+
+    const pending = verifyFix(store, fingerprint, {
+      timeoutMs: 200,
+      quietWindowMs: 200,
+      pollIntervalMs: 10,
+    });
+    const updateAt = Date.now() + 1;
+    store.add(makeHmrUpdate(updateAt));
+    // Re-render error: one millisecond after the update, long before the
+    // next poll tick.
+    store.add(makeError({ timestamp: updateAt + 1 }));
+
+    const result = asResult(await pending);
+    expect(result.verified).toBe(false);
+    expect(result.recurred).toBe(true);
+  });
 });

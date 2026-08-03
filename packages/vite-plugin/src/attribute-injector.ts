@@ -10,6 +10,17 @@ export interface InjectResult {
   map: ReturnType<MagicString['generateMap']>;
 }
 
+/**
+ * Renders a value as a double-quoted JSX/HTML attribute. `JSON.stringify`
+ * is the wrong escaper here: neither JSX string attribute values nor HTML
+ * attributes understand backslash escapes — both use entities, which both
+ * parsers decode back to the raw characters. A quote in a file name must
+ * not produce output the downstream framework plugin cannot parse.
+ */
+export function quoteAttributeValue(value: string): string {
+  return `"${value.replaceAll('&', '&amp;').replaceAll('"', '&quot;')}"`;
+}
+
 interface BabelNode {
   type: string;
   start?: number | null;
@@ -100,7 +111,7 @@ export function injectSourceAttributes(code: string, fileName: string): InjectRe
       return;
     }
     const location = `${fileName}:${String(node.loc.start.line)}`;
-    source.appendLeft(name.end, ` ${SOURCE_ATTRIBUTE}=${JSON.stringify(location)}`);
+    source.appendLeft(name.end, ` ${SOURCE_ATTRIBUTE}=${quoteAttributeValue(location)}`);
   });
 
   if (!source.hasChanged()) {

@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ActionResult, SnapshotResponse } from './protocol';
-import { isActionRequest, isActionResult, isSnapshotRequest, isSnapshotResponse } from './protocol';
+import type { ActionResult, FocusUpdate, SnapshotResponse } from './protocol';
+import {
+  isActionRequest,
+  isActionResult,
+  isActionSequenceRequest,
+  isActionSequenceResult,
+  isFocusUpdate,
+  isSnapshotRequest,
+  isSnapshotResponse,
+  isSourceQueryRequest,
+  isSourceQueryResponse,
+} from './protocol';
 
 describe('isSnapshotRequest', () => {
   it('accepts a well-formed request', () => {
@@ -35,6 +45,113 @@ describe('isActionRequest', () => {
     expect(isActionRequest({ kind: 'action-request', action: 'click' })).toBe(false);
     expect(isActionRequest({ kind: 'action-request', requestId: 'r1' })).toBe(false);
     expect(isActionRequest(null)).toBe(false);
+  });
+});
+
+describe('isActionSequenceRequest / isActionSequenceResult', () => {
+  it('accepts well-formed messages', () => {
+    expect(
+      isActionSequenceRequest({
+        kind: 'action-sequence-request',
+        requestId: 'r1',
+        steps: [{ action: 'click', target: { selector: '#go' } }],
+      }),
+    ).toBe(true);
+    expect(
+      isActionSequenceResult({
+        kind: 'action-sequence-result',
+        requestId: 'r1',
+        sessionId: 's1',
+        ok: false,
+        stoppedAt: 1,
+        stopReason: 'boom',
+        stepResults: [],
+        totalEffects: { errors: 0, failedRequests: 0, consoleErrors: 0 },
+        finalUrl: 'http://localhost:5173/',
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects missing fields and non-objects', () => {
+    expect(isActionSequenceRequest({ kind: 'action-sequence-request', requestId: 'r1' })).toBe(
+      false,
+    );
+    expect(
+      isActionSequenceResult({
+        kind: 'action-sequence-result',
+        requestId: 'r1',
+        sessionId: 's1',
+        ok: true,
+        stoppedAt: null,
+        stopReason: null,
+        stepResults: [],
+        totalEffects: null,
+        finalUrl: 'u',
+      }),
+    ).toBe(false);
+    expect(isActionSequenceRequest(null)).toBe(false);
+  });
+});
+
+describe('isSourceQueryRequest / isSourceQueryResponse', () => {
+  it('accepts well-formed messages', () => {
+    expect(
+      isSourceQueryRequest({
+        kind: 'source-query-request',
+        requestId: 'r1',
+        source: 'src/App.vue',
+      }),
+    ).toBe(true);
+    expect(
+      isSourceQueryResponse({
+        kind: 'source-query-response',
+        requestId: 'r1',
+        sessionId: 's1',
+        url: 'http://localhost:5173/',
+        capturedAt: 1,
+        elements: [],
+        truncated: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects missing fields and non-objects', () => {
+    expect(isSourceQueryRequest({ kind: 'source-query-request', requestId: 'r1' })).toBe(false);
+    expect(
+      isSourceQueryResponse({
+        kind: 'source-query-response',
+        requestId: 'r1',
+        sessionId: 's1',
+        url: 'u',
+        capturedAt: 1,
+        elements: 'nope',
+        truncated: false,
+      }),
+    ).toBe(false);
+    expect(isSourceQueryRequest(null)).toBe(false);
+  });
+});
+
+describe('isFocusUpdate', () => {
+  const valid: FocusUpdate = {
+    kind: 'focus-update',
+    sessionId: 'session-1',
+    visible: true,
+    focused: false,
+    url: 'http://localhost:5173/',
+    at: 1720000000000,
+  };
+
+  it('accepts a well-formed update', () => {
+    expect(isFocusUpdate(valid)).toBe(true);
+  });
+
+  it('rejects wrong kind, missing or mistyped fields and non-objects', () => {
+    expect(isFocusUpdate({ ...valid, kind: 'action-result' })).toBe(false);
+    expect(isFocusUpdate({ ...valid, visible: 'yes' })).toBe(false);
+    expect(isFocusUpdate({ ...valid, sessionId: undefined })).toBe(false);
+    expect(isFocusUpdate({ ...valid, at: 'now' })).toBe(false);
+    expect(isFocusUpdate(null)).toBe(false);
   });
 });
 

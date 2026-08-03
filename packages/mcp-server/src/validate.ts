@@ -10,6 +10,12 @@ import { z } from 'zod';
 
 import type { AgentLensEvent } from '@agentlensjs/shared';
 
+// zod v4's z.number() already rejects NaN/Infinity, but absurd finite
+// magnitudes remain: a forged far-future timestamp would poison every
+// time-window computation (wait_for_idle never idle, verify_fix seeing
+// eternal "code updates"). Bound it to plausible wall-clock values.
+const epochMs = z.number().min(0).max(4_102_444_800_000); // year 2100
+
 const stackFrameSchema = z.object({
   functionName: z.string().nullable(),
   fileName: z.string().nullable(),
@@ -19,7 +25,7 @@ const stackFrameSchema = z.object({
 
 const baseFields = {
   id: z.string(),
-  timestamp: z.number(),
+  timestamp: epochMs,
   sessionId: z.string(),
   url: z.string(),
 };
@@ -31,7 +37,9 @@ const errorEventSchema = z.object({
   message: z.string(),
   stack: z.string().nullable(),
   frames: z.array(stackFrameSchema),
-  occurrences: z.number(),
+  // The protocol pins this to 1 on the wire; the daemon owns the folding
+  // counter, so an inflated value from a hostile page must not enter it.
+  occurrences: z.literal(1),
   fingerprint: z.string().optional(),
 });
 
@@ -49,7 +57,7 @@ const networkEventSchema = z.object({
   method: z.string(),
   requestUrl: z.string(),
   status: z.number().nullable(),
-  durationMs: z.number(),
+  durationMs: z.number().min(0),
   initiatorStack: z.string().nullable(),
   initiatorFrames: z.array(stackFrameSchema),
   requestBody: z.string().nullable(),

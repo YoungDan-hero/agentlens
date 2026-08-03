@@ -38,7 +38,9 @@ export async function waitForIdle(
 ): Promise<WaitForIdleResult> {
   const quietMs = options.quietMs ?? DEFAULT_QUIET_MS;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const { sessionId } = options;
+  // Resolve the default scope once, as documented: without it, heartbeat
+  // events from any background tab would keep "idle" out of reach forever.
+  const sessionId = options.sessionId ?? store.listSessions()[0]?.sessionId;
   const startedAt = Date.now();
 
   for (;;) {

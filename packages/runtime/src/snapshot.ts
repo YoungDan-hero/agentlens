@@ -49,7 +49,9 @@ export function captureLayoutSnapshot(
   const view = doc.defaultView;
 
   function visit(element: Element): LayoutNode | null {
-    if (SKIPPED_TAGS.has(element.tagName)) {
+    // toUpperCase: SVG tagNames stay lowercase ('script' inside an <svg>),
+    // and those scripts/styles are just as layout-irrelevant as HTML ones.
+    if (SKIPPED_TAGS.has(element.tagName.toUpperCase())) {
       return null;
     }
     if (budget <= 0) {

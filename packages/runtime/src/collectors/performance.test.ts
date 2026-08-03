@@ -100,6 +100,26 @@ describe('installPerformanceCollector', () => {
     vi.useRealTimers();
   });
 
+  it('degrades instead of crashing when supportedEntryTypes is missing', () => {
+    // Safari ≤12 ships PerformanceObserver without the static property;
+    // init() must not blow up over it.
+    class LegacyPerformanceObserver {
+      observe(): void {
+        throw new Error('should never be reached without supportedEntryTypes');
+      }
+      disconnect(): void {
+        /* noop */
+      }
+    }
+    vi.stubGlobal('PerformanceObserver', LegacyPerformanceObserver);
+    const { sink, events } = createSink();
+
+    expect(() => {
+      teardown = installPerformanceCollector(sink, context);
+    }).not.toThrow();
+    expect(perfEvents(events)).toHaveLength(0);
+  });
+
   it('emits FCP once from the paint entry', () => {
     const { sink, events } = createSink();
     teardown = installPerformanceCollector(sink, context);

@@ -39,6 +39,15 @@ export function parseAllowedOrigins(raw: string | undefined): string[] {
  * - Everything else (public websites, `null` from sandboxed iframes):
  *   rejected unless explicitly listed in `extraAllowed`.
  */
+/** Canonical `scheme://host[:port]` form (lowercased, default port dropped). */
+function canonicalOrigin(value: string): string | null {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
 export function isAllowedOrigin(
   origin: string | undefined,
   extraAllowed: readonly string[] = [],
@@ -46,7 +55,16 @@ export function isAllowedOrigin(
   if (origin === undefined || origin === '') {
     return true;
   }
-  if (extraAllowed.includes(origin)) {
+  // Compare canonical forms so a configured `https://Dev.Example.com` or
+  // `https://dev.example.com:443` still matches the browser's normalized
+  // Origin header; fall back to the exact string for unparseable entries.
+  const incoming = canonicalOrigin(origin);
+  if (
+    extraAllowed.some(
+      (allowed) =>
+        allowed === origin || (incoming !== null && canonicalOrigin(allowed) === incoming),
+    )
+  ) {
     return true;
   }
   let hostname: string;

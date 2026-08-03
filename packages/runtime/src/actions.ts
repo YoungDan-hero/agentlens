@@ -1,16 +1,27 @@
 import type {
   ActionEffects,
+  ActionOutcome,
   ActionRequest,
-  ActionResult,
+  ActionSequenceRequest,
+  ActionSequenceResult,
+  ActionStep,
   ActionTarget,
   AgentLensEvent,
+  WaitCondition,
 } from '@agentlensjs/shared';
-import { SOURCE_ATTRIBUTE } from '@agentlensjs/shared';
+import { MAX_SEQUENCE_STEPS, SOURCE_ATTRIBUTE } from '@agentlensjs/shared';
 
 import { describeTarget } from './collectors/interactions';
+import { redactUrl } from './redact';
+import { isElementVisible } from './visibility';
 
-/** Everything of an ActionResult the executor owns (envelope added by init). */
-export type ActionOutcome = Omit<ActionResult, 'kind' | 'requestId' | 'sessionId'>;
+export type { ActionOutcome };
+
+/** Everything of a sequence result the executor owns (envelope added by init). */
+export type SequenceOutcome = Omit<ActionSequenceResult, 'kind' | 'requestId' | 'sessionId'>;
+
+/** The executable part of a request — shared by single actions and steps. */
+type RunnableAction = Pick<ActionRequest, 'action' | 'target' | 'value' | 'url' | 'x' | 'y'>;
 
 export interface ActionExecutorOptions {
   /** Master switch — actions are refused entirely unless explicitly enabled. */
@@ -25,6 +36,7 @@ export interface ActionExecutorOptions {
 
 export interface ActionExecutor {
   handle: (request: ActionRequest) => Promise<ActionOutcome>;
+  handleSequence: (request: ActionSequenceRequest) => Promise<SequenceOutcome>;
   /** Feed of locally captured events; drives settle detection and effects. */
   noteLocalEvent: (event: AgentLensEvent) => void;
   /**
@@ -117,6 +129,28 @@ function findByText(text: string): Element[] | string {
   );
 }
 
+/** Locator fields shared by action targets and wait conditions. */
+interface Locator {
+  source?: string;
+  selector?: string;
+  text?: string;
+}
+
+/** Collects every element a locator matches, or an error message. */
+function collectMatches(locator: Locator): Element[] | string {
+  if (locator.source !== undefined) {
+    return [...document.querySelectorAll(`[${SOURCE_ATTRIBUTE}="${CSS.escape(locator.source)}"]`)];
+  }
+  if (locator.selector !== undefined) {
+    try {
+      return [...document.querySelectorAll(locator.selector)];
+    } catch {
+      return `invalid CSS selector "${locator.selector}"`;
+    }
+  }
+  return findByText(locator.text ?? '');
+}
+
 /** Resolves a locator to exactly one element, or returns an error message. */
 function resolveTarget(target: ActionTarget | undefined): Element | string {
   if (
@@ -126,24 +160,11 @@ function resolveTarget(target: ActionTarget | undefined): Element | string {
     return 'this action needs a target: pass source, selector or text';
   }
 
-  let matches: Element[];
-  if (target.source !== undefined) {
-    matches = [
-      ...document.querySelectorAll(`[${SOURCE_ATTRIBUTE}="${CSS.escape(target.source)}"]`),
-    ];
-  } else if (target.selector !== undefined) {
-    try {
-      matches = [...document.querySelectorAll(target.selector)];
-    } catch {
-      return `invalid CSS selector "${target.selector}"`;
-    }
-  } else {
-    const found = findByText(target.text ?? '');
-    if (typeof found === 'string') {
-      return found;
-    }
-    matches = found;
+  const collected = collectMatches(target);
+  if (typeof collected === 'string') {
+    return collected;
   }
+  const matches = collected;
 
   const first = matches[0];
   if (first === undefined) {
@@ -163,10 +184,10 @@ function resolveTarget(target: ActionTarget | undefined): Element | string {
 }
 
 /**
- * Interactable = attached and not hidden via CSS. Deliberately no
- * bounding-rect check: synthetic dispatch needs no hit-testing, zero-sized
- * inline wrappers are legitimate targets, and jsdom reports all rects as
- * zero which would make the executor untestable.
+ * Interactable = attached and not hidden via CSS (own style or an ancestor).
+ * Deliberately no bounding-rect check: synthetic dispatch needs no
+ * hit-testing, zero-sized inline wrappers are legitimate targets, and jsdom
+ * reports all rects as zero which would make the executor untestable.
  */
 function checkInteractable(element: Element): string | null {
   if (!element.isConnected) {
@@ -179,10 +200,84 @@ function checkInteractable(element: Element): string | null {
   if (element.closest('[hidden]')) {
     return 'the element is inside a [hidden] subtree';
   }
+  if (!isElementVisible(element)) {
+    return 'the element is inside a hidden (display:none) ancestor';
+  }
   if ('disabled' in element && (element as { disabled: unknown }).disabled === true) {
     return 'the element is disabled';
   }
   return null;
+}
+
+/** Describes a wait condition's locator for error messages. */
+function describeWaitLocator(condition: WaitCondition): string {
+  if (condition.source !== undefined) {
+    return `source "${condition.source}"`;
+  }
+  if (condition.selector !== undefined) {
+    return `selector "${condition.selector}"`;
+  }
+  return `text "${condition.text ?? ''}"`;
+}
+
+/** Whether the wait condition currently holds. Errors propagate as strings. */
+function checkWaitCondition(condition: WaitCondition): boolean | string {
+  const collected = collectMatches(condition);
+  if (typeof collected === 'string') {
+    // Invalid selector / degenerate text locator: not a transient state,
+    // waiting longer will never fix it.
+    return collected;
+  }
+  const state = condition.state ?? 'visible';
+  if (state === 'attached') {
+    return collected.length > 0;
+  }
+  if (state === 'visible') {
+    return collected.some(isElementVisible);
+  }
+  return !collected.some(isElementVisible);
+}
+
+const WAIT_POLL_MS = 50;
+const DEFAULT_WAIT_TIMEOUT_MS = 5000;
+const MAX_WAIT_TIMEOUT_MS = 15_000;
+
+/**
+ * Polls a wait condition until it holds or the timeout expires. Resolves
+ * with null on success, an error message otherwise.
+ */
+function waitForCondition(condition: WaitCondition): Promise<string | null> {
+  if (
+    condition.source === undefined &&
+    condition.selector === undefined &&
+    condition.text === undefined
+  ) {
+    return Promise.resolve('waitFor needs a locator: pass source, selector or text');
+  }
+  const timeoutMs = Math.min(condition.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS);
+  const startedAt = Date.now();
+  return new Promise((resolve) => {
+    const check = (): void => {
+      const holds = checkWaitCondition(condition);
+      if (typeof holds === 'string') {
+        resolve(holds);
+        return;
+      }
+      if (holds) {
+        resolve(null);
+        return;
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        resolve(
+          `waitFor timed out after ${String(timeoutMs)}ms: ${describeWaitLocator(condition)} ` +
+            `never became ${condition.state ?? 'visible'}`,
+        );
+        return;
+      }
+      setTimeout(check, WAIT_POLL_MS);
+    };
+    check();
+  });
 }
 
 /**
@@ -328,7 +423,7 @@ function performSelect(element: Element, value: string): string | null {
   return null;
 }
 
-function performScroll(request: ActionRequest, element: Element | null): string | null {
+function performScroll(request: RunnableAction, element: Element | null): string | null {
   if (element) {
     if (typeof element.scrollIntoView === 'function') {
       element.scrollIntoView({ block: 'center', inline: 'nearest' });
@@ -414,7 +509,7 @@ export function createActionExecutor(options: ActionExecutorOptions): ActionExec
     });
   }
 
-  async function run(request: ActionRequest): Promise<ActionOutcome> {
+  async function run(request: RunnableAction): Promise<ActionOutcome> {
     // Element-less variants first.
     if (request.action === 'navigate') {
       return runNavigate(request);
@@ -493,7 +588,7 @@ export function createActionExecutor(options: ActionExecutorOptions): ActionExec
     };
   }
 
-  function runNavigate(request: ActionRequest): ActionOutcome {
+  function runNavigate(request: RunnableAction): ActionOutcome {
     if (request.url === undefined) {
       return failure('navigate needs a url');
     }
@@ -532,6 +627,119 @@ export function createActionExecutor(options: ActionExecutorOptions): ActionExec
     };
   }
 
+  function userIsActive(): boolean {
+    return Date.now() - lastTrustedInputAt < userActivityWindowMs;
+  }
+
+  function addEffects(total: ActionEffects, step: ActionEffects): void {
+    total.errors += step.errors;
+    total.failedRequests += step.failedRequests;
+    total.consoleErrors += step.consoleErrors;
+  }
+
+  function sequenceStop(
+    stepResults: ActionOutcome[],
+    totalEffects: ActionEffects,
+    stoppedAt: number | null,
+    stopReason: string | null,
+  ): SequenceOutcome {
+    return {
+      ok: stoppedAt === null && stopReason === null,
+      stoppedAt,
+      stopReason,
+      stepResults,
+      totalEffects,
+      finalUrl: redactUrl(window.location.href),
+    };
+  }
+
+  /**
+   * Runs the steps in order, stopping at the first failure and returning
+   * the break point so the agent can re-plan from there instead of
+   * re-running the whole script.
+   */
+  async function runSequence(request: ActionSequenceRequest): Promise<SequenceOutcome> {
+    const stepResults: ActionOutcome[] = [];
+    const totalEffects = zeroEffects();
+
+    // Structural refusals first — waiting or retrying will not fix these.
+    if (request.steps.length === 0) {
+      return sequenceStop(stepResults, totalEffects, null, 'the sequence has no steps');
+    }
+    if (request.steps.length > MAX_SEQUENCE_STEPS) {
+      return sequenceStop(
+        stepResults,
+        totalEffects,
+        null,
+        `too many steps (${String(request.steps.length)}); sequences are capped at ${String(MAX_SEQUENCE_STEPS)}`,
+      );
+    }
+    const badNavigate = request.steps.findIndex(
+      (step, index) => step.action === 'navigate' && index !== request.steps.length - 1,
+    );
+    if (badNavigate !== -1) {
+      return sequenceStop(
+        stepResults,
+        totalEffects,
+        null,
+        `step ${String(badNavigate)} is a navigate in the middle of the sequence; ` +
+          'a full page load would tear down the page (and this socket) mid-run, ' +
+          'so navigate is only allowed as the final step',
+      );
+    }
+
+    for (let index = 0; index < request.steps.length; index += 1) {
+      const step: ActionStep | undefined = request.steps[index];
+      if (!step) {
+        continue;
+      }
+      // Human input wins at every step boundary: if the user started
+      // interacting while the sequence was running, stop cleanly instead
+      // of fighting them for the page.
+      if (userIsActive()) {
+        return sequenceStop(
+          stepResults,
+          totalEffects,
+          index,
+          'the user started interacting with the page; sequence aborted — human input wins',
+        );
+      }
+      if (!KNOWN_ACTIONS.has(step.action)) {
+        return sequenceStop(
+          stepResults,
+          totalEffects,
+          index,
+          `unsupported action "${step.action}" — update @agentlensjs/runtime (or the Vite plugin)`,
+        );
+      }
+      if (step.waitFor) {
+        const waitError = await waitForCondition(step.waitFor);
+        if (waitError !== null) {
+          stepResults.push(failure(waitError));
+          return sequenceStop(stepResults, totalEffects, index, waitError);
+        }
+        // A waitFor can poll for many seconds — long enough for the user
+        // to grab the page. Re-check before executing the step, not just
+        // at the step boundary that preceded the wait.
+        if (userIsActive()) {
+          return sequenceStop(
+            stepResults,
+            totalEffects,
+            index,
+            'the user started interacting with the page; sequence aborted — human input wins',
+          );
+        }
+      }
+      const outcome = await run(step);
+      stepResults.push(outcome);
+      addEffects(totalEffects, outcome.effects);
+      if (!outcome.ok) {
+        return sequenceStop(stepResults, totalEffects, index, outcome.error);
+      }
+    }
+    return sequenceStop(stepResults, totalEffects, null, null);
+  }
+
   return {
     async handle(request: ActionRequest): Promise<ActionOutcome> {
       if (!options.enabled) {
@@ -547,7 +755,7 @@ export function createActionExecutor(options: ActionExecutorOptions): ActionExec
           `unsupported action "${request.action}" — update @agentlensjs/runtime (or the Vite plugin) to a version that supports it`,
         );
       }
-      if (Date.now() - lastTrustedInputAt < userActivityWindowMs) {
+      if (userIsActive()) {
         return failure(
           'the user is actively interacting with the page right now; human input wins — retry in a moment',
         );
@@ -561,6 +769,46 @@ export function createActionExecutor(options: ActionExecutorOptions): ActionExec
       } catch (unexpected) {
         return failure(
           `action failed unexpectedly: ${unexpected instanceof Error ? unexpected.message : String(unexpected)}`,
+        );
+      } finally {
+        busy = false;
+        counting = false;
+      }
+    },
+    async handleSequence(request: ActionSequenceRequest): Promise<SequenceOutcome> {
+      if (!options.enabled) {
+        return sequenceStop(
+          [],
+          zeroEffects(),
+          null,
+          'actions are disabled for this app — opt in with allowActions: true in the AgentLens plugin/init options',
+        );
+      }
+      if (userIsActive()) {
+        return sequenceStop(
+          [],
+          zeroEffects(),
+          null,
+          'the user is actively interacting with the page right now; human input wins — retry in a moment',
+        );
+      }
+      if (busy) {
+        return sequenceStop(
+          [],
+          zeroEffects(),
+          null,
+          'another action is still in progress; actions run one at a time',
+        );
+      }
+      busy = true;
+      try {
+        return await runSequence(request);
+      } catch (unexpected) {
+        return sequenceStop(
+          [],
+          zeroEffects(),
+          null,
+          `sequence failed unexpectedly: ${unexpected instanceof Error ? unexpected.message : String(unexpected)}`,
         );
       } finally {
         busy = false;

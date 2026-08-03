@@ -4,6 +4,7 @@
 import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
 // Dedicated ports so the pipeline never collides with a developer's running
@@ -11,9 +12,11 @@ import { chromium } from 'playwright-core';
 const VITE_PORT = '5277';
 const DAEMON_PORT = '8634';
 const DEMO_URL = `http://localhost:${VITE_PORT}/`;
-const DAEMON_ENTRY = new URL('../../packages/mcp-server/dist/index.js', import.meta.url).pathname;
-const DEMO_DIR = new URL('.', import.meta.url).pathname;
-const APP_FILE = new URL('./src/App.vue', import.meta.url).pathname;
+const DAEMON_ENTRY = fileURLToPath(
+  new URL('../../packages/mcp-server/dist/index.js', import.meta.url),
+);
+const DEMO_DIR = fileURLToPath(new URL('.', import.meta.url));
+const APP_FILE = fileURLToPath(new URL('./src/App.vue', import.meta.url));
 
 /** Minimal MCP client speaking newline-delimited JSON-RPC over stdio. */
 class McpClient {
@@ -93,14 +96,14 @@ function assert(condition, label) {
 }
 
 async function main() {
-  console.log('1/7 Starting AgentLens daemon...');
+  console.log('1/8 Starting AgentLens daemon...');
   const daemon = spawn('node', [DAEMON_ENTRY], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: { ...process.env, AGENTLENS_PORT: DAEMON_PORT },
   });
   daemon.stderr.on('data', (d) => process.stdout.write(`      [daemon] ${d}`));
 
-  console.log('2/7 Starting Vite dev server...');
+  console.log('2/8 Starting Vite dev server...');
   // Spawn the vite entry directly (not via `pnpm exec`) so kill() reaches
   // the actual server process instead of a wrapper.
   const vite = spawn(
@@ -114,7 +117,7 @@ async function main() {
   );
   await waitForHttp(DEMO_URL, 30_000);
 
-  console.log('3/7 Launching headless Chrome and triggering signals...');
+  console.log('3/8 Launching headless Chrome and triggering signals...');
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   const originalAppSource = await readFile(APP_FILE, 'utf8');
   try {
@@ -147,7 +150,7 @@ async function main() {
       await sleep(200);
     }
 
-    console.log('4/7 Querying the daemon over MCP...');
+    console.log('4/8 Querying the daemon over MCP...');
     const client = new McpClient(daemon);
     await client.request('initialize', {
       protocolVersion: '2025-06-18',
@@ -179,7 +182,7 @@ async function main() {
     const network = await client.callTool('get_recent_events', { type: 'network' });
     const lifecycle = await client.callTool('get_recent_events', { type: 'lifecycle' });
 
-    console.log('5/7 Asserting the captured signals...');
+    console.log('5/8 Asserting the captured signals...');
     assert(
       lifecycle.some((e) => e.phase === 'load'),
       'lifecycle: page load event captured',
@@ -283,7 +286,7 @@ async function main() {
       'timeline: uncaught error attributed to the click that caused it',
     );
 
-    console.log('6/7 Exercising the browser action channel (perform_action)...');
+    console.log('6/8 Exercising the browser action channel (perform_action)...');
     // The channel is opt-in (allowActions: true in vite.config.ts). Wait
     // long enough for the executor's user-activity window (1.5s after the
     // trusted Playwright clicks) to expire, not just for the event stream
@@ -348,7 +351,107 @@ async function main() {
       'actions: human clicks stay unmarked',
     );
 
-    console.log('7/7 Verifying the fix loop (verify_fix + real HMR)...');
+    console.log('7/8 Exercising the M6 chains (focus, reverse lookup, sequences, replay)...');
+    // Focus signal: the daemon must know this page is the one in front of
+    // the "user" (the single headless tab is both visible and focused).
+    const sessions = await client.callTool('list_sessions');
+    const liveSession = sessions.find((s) => s.connected === true);
+    assert(
+      liveSession !== undefined && liveSession.visible === true && liveSession.focused === true,
+      `focus: connected session reports visible+focused (${JSON.stringify(liveSession ?? null)})`,
+    );
+
+    // Reverse source lookup: "what does src/App.vue render right now?"
+    const rendered = await client.callTool('find_elements_by_source', { file: 'src/App.vue' });
+    assert(
+      rendered.elements?.length >= 5 &&
+        rendered.elements.some((el) => el.id === 'btn-error' && el.visible === true),
+      `reverse lookup: src/App.vue elements listed (got ${String(rendered.elements?.length)})`,
+    );
+
+    // Source-filtered events: interactions on this file's elements plus the
+    // error whose resolved stack passes through it.
+    const appInteractions = await client.callTool('get_recent_events', {
+      type: 'interaction',
+      source: 'src/App.vue',
+    });
+    assert(
+      appInteractions.length >= 1 && appInteractions.every((e) => e.type === 'interaction'),
+      'reverse lookup: interaction events filtered by source file',
+    );
+    const appErrors = await client.callTool('get_recent_events', {
+      type: 'error',
+      source: 'src/App.vue',
+    });
+    assert(
+      appErrors.some((e) => e.subtype === 'uncaught'),
+      'reverse lookup: resolved error stack matched by source filter',
+    );
+
+    // "User is active" refusals are expected agent workflow: retry shortly.
+    const callWithRetry = async (tool, args) => {
+      for (let attempt = 0; ; attempt += 1) {
+        const result = await client.callTool(tool, args);
+        const reason = String(result.error ?? result.stopReason ?? '');
+        if (attempt >= 3 || !reason.includes('actively interacting')) return result;
+        await sleep(800);
+      }
+    };
+
+    // Batch actions: input + waitFor + click in a single round-trip.
+    const sequenceResult = await callWithRetry('perform_actions', {
+      steps: [
+        { action: 'input', selector: '#visitor-name', value: 'Grace Hopper' },
+        {
+          action: 'click',
+          selector: '#btn-console',
+          waitFor: { selector: '#visitor-greeting', state: 'visible' },
+        },
+      ],
+    });
+    assert(
+      sequenceResult.ok === true && sequenceResult.stepResults?.length === 2,
+      `sequence: two steps ran in one round-trip (${JSON.stringify({
+        ok: sequenceResult.ok,
+        stoppedAt: sequenceResult.stoppedAt,
+        stopReason: sequenceResult.stopReason,
+      })})`,
+    );
+    assert(
+      sequenceResult.totalEffects?.consoleErrors >= 1,
+      `sequence: effects aggregated across steps (${JSON.stringify(sequenceResult.totalEffects)})`,
+    );
+    const sequenceGreeting = await page.textContent('#visitor-greeting');
+    assert(
+      sequenceGreeting?.includes('Grace Hopper') === true,
+      `sequence: v-model updated by the scripted input (got "${String(sequenceGreeting)}")`,
+    );
+
+    // One-command replay: derive the reproduction script for the uncaught
+    // error, then execute it and confirm the error recurs (it is unfixed).
+    const uncaughtForReplay = errors.find((e) => e.subtype === 'uncaught');
+    const dryScript = await client.callTool('replay_error_path', {
+      fingerprint: uncaughtForReplay.fingerprint,
+    });
+    assert(
+      dryScript.executable === true &&
+        dryScript.steps?.some((s) => /^src\/App\.vue:\d+$/.test(s.target?.source ?? '')),
+      `replay: dry run derived a source-locator script (${JSON.stringify(dryScript.steps)})`,
+    );
+    const replayRun = await callWithRetry('replay_error_path', {
+      fingerprint: uncaughtForReplay.fingerprint,
+      dryRun: false,
+    });
+    assert(
+      replayRun.errorRecurred === true && replayRun.occurrencesAfter > replayRun.occurrencesBefore,
+      `replay: unfixed error recurred on replay (${JSON.stringify({
+        before: replayRun.occurrencesBefore,
+        after: replayRun.occurrencesAfter,
+        stopReason: replayRun.stopReason ?? null,
+      })})`,
+    );
+
+    console.log('8/8 Verifying the fix loop (verify_fix + real HMR)...');
     const uncaught = errors.find((e) => e.subtype === 'uncaught');
     assert(
       typeof uncaught?.fingerprint === 'string' && uncaught.fingerprint.length > 0,

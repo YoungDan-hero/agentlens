@@ -36,6 +36,10 @@ async function main(): Promise<void> {
       return;
     }
     shuttingDown = true;
+    // Hard-exit fallback: a wedged browser tab can stall the graceful
+    // close handshake for ~30s (ws internal timeout), keeping the port
+    // occupied exactly when an MCP reload wants to start the next daemon.
+    setTimeout(() => process.exit(0), 3000).unref();
     void ingest.close().finally(() => {
       process.exit(0);
     });
@@ -55,8 +59,9 @@ function resolvePort(): number {
   if (raw === undefined) {
     return DEFAULT_WS_PORT;
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (Number.isNaN(parsed) || parsed <= 0 || parsed > 65_535) {
+  // Number() instead of parseInt(): "8080abc" must fail, not become 8080.
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65_535) {
     throw new RangeError(`Invalid AGENTLENS_PORT: ${raw}`);
   }
   return parsed;

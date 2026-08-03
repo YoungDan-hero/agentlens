@@ -48,6 +48,52 @@ describe('EventStore', () => {
     expect(() => new EventStore(0)).toThrow(RangeError);
   });
 
+  it('caps the session index and evicts the least recently active session', () => {
+    const store = new EventStore();
+    const base = Date.now();
+    // 101 page loads: one session each. The oldest must give way.
+    for (let i = 0; i < 101; i += 1) {
+      store.add(
+        makeError({
+          sessionId: `session-${String(i)}`,
+          timestamp: base + i,
+          message: `m${String(i)}`,
+        }),
+      );
+    }
+
+    const sessions = store.listSessions();
+    expect(sessions).toHaveLength(100);
+    expect(sessions.some((s) => s.sessionId === 'session-0')).toBe(false);
+    expect(sessions.some((s) => s.sessionId === 'session-100')).toBe(true);
+  });
+
+  it('reports the latest code update after a baseline, scoped by origin', () => {
+    const store = new EventStore();
+    const base = Date.now();
+    const lifecycle = (timestamp: number, url: string): AgentLensEvent => {
+      counter += 1;
+      return {
+        id: `event-${String(counter)}`,
+        type: 'lifecycle',
+        timestamp,
+        sessionId: 's1',
+        url,
+        phase: 'hmr-update',
+      };
+    };
+    store.add(lifecycle(base + 100, 'http://localhost:5173/'));
+    store.add(lifecycle(base + 200, 'http://localhost:5173/#/settings'));
+    store.add(lifecycle(base + 300, 'http://localhost:4000/')); // other dev server
+
+    // Latest matching update wins; the foreign origin never counts.
+    expect(store.latestCodeUpdateSince(base, 'http://localhost:5173')).toBe(base + 200);
+    // Strictly after the baseline.
+    expect(store.latestCodeUpdateSince(base + 200, 'http://localhost:5173')).toBeNull();
+    // Unscoped sees everything.
+    expect(store.latestCodeUpdateSince(base)).toBe(base + 300);
+  });
+
   it('evicts oldest events beyond capacity', () => {
     const store = new EventStore(2);
     // Distinct messages so folding does not interfere with eviction.
@@ -63,6 +109,100 @@ describe('EventStore', () => {
     expect(store.size).toBe(2);
     const ids = store.query({ limit: 10 }).map((event: AgentLensEvent) => event.id);
     expect(ids).toEqual([third.id, second.id]);
+  });
+
+  it('filters events by source attribution across event kinds', () => {
+    const store = new EventStore();
+    const interaction: AgentLensEvent = {
+      id: 'i1',
+      type: 'interaction',
+      subtype: 'click',
+      timestamp: Date.now(),
+      sessionId: 'session-1',
+      url: 'http://localhost:5173/',
+      target: { tag: 'button', id: 'go', text: 'Go', source: 'src/App.vue:12' },
+    };
+    store.add(interaction);
+    // Resolved frame paths carry a leading slash; the filter must still match.
+    store.add(
+      makeError({
+        message: 'from App',
+        frames: [{ functionName: 'render', fileName: '/src/App.vue', line: 30, column: 5 }],
+      }),
+    );
+    store.add(
+      makeNetwork(500, {
+        initiatorFrames: [{ functionName: 'load', fileName: '/src/api.ts', line: 8, column: 1 }],
+      }),
+    );
+    store.add(makeError({ message: 'unattributed' }));
+
+    const byFile = store.query({ source: 'src/App.vue' });
+    expect(byFile.map((event) => event.type).sort()).toEqual(['error', 'interaction']);
+
+    // Exact line narrows within the file.
+    expect(store.query({ source: 'src/App.vue:12' })).toHaveLength(1);
+    expect(store.query({ source: 'src/App.vue:12' })[0]?.type).toBe('interaction');
+
+    expect(store.query({ source: 'src/api.ts' })[0]?.type).toBe('network');
+    expect(store.query({ source: 'src/Missing.vue' })).toHaveLength(0);
+  });
+
+  it('matches absolute resolved frame paths against relative source filters', () => {
+    const store = new EventStore();
+    store.add(
+      makeError({
+        frames: [
+          {
+            functionName: 'onClick',
+            fileName: '/Users/dev/project/examples/vue-demo/src/App.vue',
+            line: 79,
+            column: 3,
+          },
+        ],
+      }),
+    );
+
+    expect(store.query({ source: 'src/App.vue' })).toHaveLength(1);
+    expect(store.query({ source: 'src/App.vue:79' })).toHaveLength(1);
+    // Boundary check: `App.vue` as a bare suffix must not match `NotApp.vue`.
+    expect(store.query({ source: 'pp.vue' })).toHaveLength(0);
+  });
+
+  it('matches basename-only frame paths (Vue SFC sourcemaps)', () => {
+    const store = new EventStore();
+    // @vitejs/plugin-vue emits `App.vue` as the source, with no directory.
+    store.add(
+      makeError({
+        frames: [{ functionName: 'onClick', fileName: 'App.vue', line: 79, column: 3 }],
+      }),
+    );
+
+    expect(store.query({ source: 'src/App.vue' })).toHaveLength(1);
+    expect(store.query({ source: 'src/App.vue:79' })).toHaveLength(1);
+    expect(store.query({ source: 'src/Other.vue' })).toHaveLength(0);
+  });
+
+  it('applies the same tolerant path matching to interaction attributions', () => {
+    const store = new EventStore();
+    const interaction: AgentLensEvent = {
+      id: 'i-path',
+      type: 'interaction',
+      subtype: 'click',
+      timestamp: Date.now(),
+      sessionId: 'session-1',
+      url: 'http://localhost:5173/',
+      target: { tag: 'button', id: null, text: 'Go', source: 'src/App.vue:12' },
+    };
+    store.add(interaction);
+
+    // A basename filter must behave the same for interactions as for
+    // stack frames — `App.vue` matches `src/App.vue:12`.
+    expect(store.query({ source: 'App.vue' })).toHaveLength(1);
+    expect(store.query({ source: 'App.vue:12' })).toHaveLength(1);
+    expect(store.query({ source: 'App.vue:99' })).toHaveLength(0);
+    // Suffix matching stays anchored at directory boundaries.
+    expect(store.query({ source: 'pp.vue' })).toHaveLength(0);
   });
 
   it('folds identical errors into one record with an occurrence count', () => {

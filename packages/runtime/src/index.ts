@@ -1,5 +1,18 @@
-import { DEFAULT_WS_PORT, isActionRequest, isSnapshotRequest, WS_PATH } from '@agentlensjs/shared';
-import type { ActionResult, SnapshotResponse } from '@agentlensjs/shared';
+import {
+  DEFAULT_WS_PORT,
+  isActionRequest,
+  isActionSequenceRequest,
+  isSnapshotRequest,
+  isSourceQueryRequest,
+  WS_PATH,
+} from '@agentlensjs/shared';
+import type {
+  ActionResult,
+  ActionSequenceResult,
+  FocusUpdate,
+  SnapshotResponse,
+  SourceQueryResponse,
+} from '@agentlensjs/shared';
 
 import { createActionExecutor } from './actions';
 import { installConsoleCollector } from './collectors/console';
@@ -12,6 +25,7 @@ import type { EventContext } from './events';
 import { buildLifecycleEvent } from './events';
 import { redactUrl, setExtraRedactKeys } from './redact';
 import { captureLayoutSnapshot } from './snapshot';
+import { findElementsBySource } from './source-query';
 import { Transport } from './transport';
 import { generateId } from './uuid';
 
@@ -87,8 +101,14 @@ export function init(options: InitOptions = {}): AgentLensClient {
 
   const executor = createActionExecutor({ enabled: options.allowActions ?? false });
 
+  let warnedUnknownMessage = false;
   const transport: Transport = new Transport({
     endpoint,
+    // Re-report on every (re)connect so the daemon knows which page the
+    // user is looking at from the first moment of each connection.
+    onOpen: () => {
+      reportFocus();
+    },
     onMessage: (message) => {
       if (isSnapshotRequest(message)) {
         const { root, truncated } = captureLayoutSnapshot();
@@ -104,6 +124,20 @@ export function init(options: InitOptions = {}): AgentLensClient {
         transport.sendRaw(response);
         return;
       }
+      if (isSourceQueryRequest(message)) {
+        const { elements, truncated } = findElementsBySource(message.source);
+        const response: SourceQueryResponse = {
+          kind: 'source-query-response',
+          requestId: message.requestId,
+          sessionId: context.sessionId,
+          url: context.url,
+          capturedAt: Date.now(),
+          elements,
+          truncated,
+        };
+        transport.sendRaw(response);
+        return;
+      }
       if (isActionRequest(message)) {
         void executor.handle(message).then((outcome) => {
           const result: ActionResult = {
@@ -114,9 +148,54 @@ export function init(options: InitOptions = {}): AgentLensClient {
           };
           transport.sendRaw(result);
         });
+        return;
+      }
+      if (isActionSequenceRequest(message)) {
+        void executor.handleSequence(message).then((outcome) => {
+          const result: ActionSequenceResult = {
+            kind: 'action-sequence-result',
+            requestId: message.requestId,
+            sessionId: context.sessionId,
+            ...outcome,
+          };
+          transport.sendRaw(result);
+        });
+        return;
+      }
+      // Version skew (newer daemon, older runtime) would otherwise fail as
+      // a silent daemon-side timeout with zero diagnosis surface. One line,
+      // once — the SDK must not spam the console it instruments.
+      if (!warnedUnknownMessage) {
+        warnedUnknownMessage = true;
+        console.warn(
+          '[agentlens] received a daemon request this runtime version does not ' +
+            'understand — update @agentlensjs/runtime (and the Vite plugin) to ' +
+            'match your @agentlensjs/mcp-server version.',
+        );
       }
     },
   });
+  // Focus reporting drives the daemon's session picking: snapshots and
+  // actions target the page the user is actually looking at, not whichever
+  // background tab happened to log last.
+  function reportFocus(): void {
+    const update: FocusUpdate = {
+      kind: 'focus-update',
+      sessionId: context.sessionId,
+      visible: document.visibilityState === 'visible',
+      focused: document.hasFocus(),
+      url: context.url,
+      at: Date.now(),
+    };
+    transport.sendRaw(update);
+  }
+  const onFocusChange = (): void => {
+    reportFocus();
+  };
+  document.addEventListener('visibilitychange', onFocusChange);
+  window.addEventListener('focus', onFocusChange);
+  window.addEventListener('blur', onFocusChange);
+
   // Tee: the executor watches the local event stream to know when the page
   // has settled after an action and which effects the action triggered.
   const sink = {
@@ -138,6 +217,11 @@ export function init(options: InitOptions = {}): AgentLensClient {
     installNavigationCollector(sink, context),
     installPerformanceCollector(sink, context),
     executor.dispose,
+    () => {
+      document.removeEventListener('visibilitychange', onFocusChange);
+      window.removeEventListener('focus', onFocusChange);
+      window.removeEventListener('blur', onFocusChange);
+    },
   ];
 
   // Flush synchronously on pagehide: the batch window would otherwise drop

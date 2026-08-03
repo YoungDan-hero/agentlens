@@ -7,7 +7,14 @@ import type {
   LifecycleEvent,
   SnapshotResponse,
 } from '@agentlensjs/shared';
-import { PROTOCOL_VERSION, WS_PATH, isActionRequest, isSnapshotRequest } from '@agentlensjs/shared';
+import {
+  PROTOCOL_VERSION,
+  WS_PATH,
+  isActionRequest,
+  isActionSequenceRequest,
+  isSnapshotRequest,
+  isSourceQueryRequest,
+} from '@agentlensjs/shared';
 import type { StackResolver } from './stack-resolver';
 import { EventStore } from './store';
 import { startWsIngestServer, type WsIngestServer } from './ws-server';
@@ -71,6 +78,43 @@ async function connectRuntime(port: number, sessionId: string): Promise<WebSocke
     }
     if (isActionRequest(message)) {
       socket.send(JSON.stringify(makeActionResult(message.requestId, sessionId)));
+    }
+    if (isActionSequenceRequest(message)) {
+      socket.send(
+        JSON.stringify({
+          kind: 'action-sequence-result',
+          requestId: message.requestId,
+          sessionId,
+          ok: true,
+          stoppedAt: null,
+          stopReason: null,
+          stepResults: message.steps.map(() => ({
+            ok: true,
+            error: null,
+            target: null,
+            effects: { errors: 0, failedRequests: 0, consoleErrors: 0 },
+            settledAfterMs: 100,
+            settleTimedOut: false,
+          })),
+          totalEffects: { errors: 0, failedRequests: 0, consoleErrors: 0 },
+          finalUrl: 'http://localhost:5173/',
+        }),
+      );
+    }
+    if (isSourceQueryRequest(message)) {
+      socket.send(
+        JSON.stringify({
+          kind: 'source-query-response',
+          requestId: message.requestId,
+          sessionId,
+          url: 'http://localhost:5173/',
+          capturedAt: Date.now(),
+          elements: [
+            { tag: 'button', id: 'go', text: 'Go', visible: true, source: `${message.source}:3` },
+          ],
+          truncated: false,
+        }),
+      );
     }
   });
   socket.send(
@@ -138,6 +182,35 @@ describe('ws ingest server snapshots', () => {
 
     await expect(server.requestSnapshot(undefined, 150)).rejects.toThrow('did not answer');
   });
+
+  it('rejects in-flight requests when the server shuts down', async () => {
+    server = startWsIngestServer(new EventStore(), port);
+    // A runtime that registers but never answers: the requests below stay
+    // pending until close() drains them — they must reject, not hang forever.
+    const socket = new WebSocket(`ws://localhost:${String(port)}${WS_PATH}`);
+    await new Promise<void>((resolve, reject) => {
+      socket.on('open', resolve);
+      socket.on('error', reject);
+    });
+    socket.send(
+      JSON.stringify({ protocolVersion: PROTOCOL_VERSION, events: [makeLifecycle('s')] }),
+    );
+    sockets.push(socket);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const snapshot = server.requestSnapshot(undefined, 60_000);
+    const action = server.requestAction({ action: 'click' }, undefined, 60_000);
+    const sequence = server.requestActionSequence([{ action: 'click' }], undefined, 60_000);
+    const query = server.requestSourceQuery('src/App.vue', undefined, 60_000);
+
+    const closing = server.close();
+    server = null;
+    await expect(snapshot).rejects.toThrow('shutting down');
+    await expect(action).rejects.toThrow('shutting down');
+    await expect(sequence).rejects.toThrow('shutting down');
+    await expect(query).rejects.toThrow('shutting down');
+    await closing;
+  });
 });
 
 describe('ws ingest server actions', () => {
@@ -178,6 +251,36 @@ describe('ws ingest server actions', () => {
     );
   });
 
+  it('round-trips an action sequence and preserves per-step results', async () => {
+    server = startWsIngestServer(new EventStore(), port);
+    sockets.push(await connectRuntime(port, 'session-a'));
+
+    const result = await server.requestActionSequence([
+      { action: 'input', target: { selector: '#name' }, value: 'Ada' },
+      { action: 'click', target: { selector: '#submit' } },
+    ]);
+    expect(result.ok).toBe(true);
+    expect(result.stepResults).toHaveLength(2);
+    expect(result.sessionId).toBe('session-a');
+
+    await expect(
+      server.requestActionSequence([{ action: 'click' }], 'session-missing'),
+    ).rejects.toThrow('session-missing');
+  });
+
+  it('round-trips a source query to the targeted session', async () => {
+    server = startWsIngestServer(new EventStore(), port);
+    sockets.push(await connectRuntime(port, 'session-a'));
+
+    const response = await server.requestSourceQuery('src/App.vue');
+    expect(response.sessionId).toBe('session-a');
+    expect(response.elements[0]?.source).toBe('src/App.vue:3');
+
+    await expect(server.requestSourceQuery('src/App.vue', 'session-missing')).rejects.toThrow(
+      'session-missing',
+    );
+  });
+
   it('times out when the browser never answers an action', async () => {
     server = startWsIngestServer(new EventStore(), port);
     const socket = new WebSocket(`ws://localhost:${String(port)}${WS_PATH}`);
@@ -194,6 +297,111 @@ describe('ws ingest server actions', () => {
     await expect(server.requestAction({ action: 'click' }, undefined, 150)).rejects.toThrow(
       'did not answer the action request',
     );
+  });
+});
+
+describe('ws ingest server focus-aware session picking', () => {
+  let server: WsIngestServer | null = null;
+  const sockets: WebSocket[] = [];
+  const port = 16_631 + Math.floor(Math.random() * 1000);
+
+  afterEach(async () => {
+    for (const socket of sockets) {
+      socket.close();
+    }
+    sockets.length = 0;
+    await server?.close();
+    server = null;
+  });
+
+  function sendFocus(socket: WebSocket, sessionId: string, visible: boolean, focused: boolean) {
+    socket.send(
+      JSON.stringify({
+        kind: 'focus-update',
+        sessionId,
+        visible,
+        focused,
+        url: 'http://localhost:5173/',
+        at: Date.now(),
+      }),
+    );
+  }
+
+  it('prefers the focused session over a more recently active background tab', async () => {
+    server = startWsIngestServer(new EventStore(), port);
+    const focusedTab = await connectRuntime(port, 'session-focused');
+    sockets.push(focusedTab);
+    sendFocus(focusedTab, 'session-focused', true, true);
+
+    // The background tab registers later (more recent activity) and says so.
+    const backgroundTab = await connectRuntime(port, 'session-background');
+    sockets.push(backgroundTab);
+    sendFocus(backgroundTab, 'session-background', false, false);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const response = await server.requestSnapshot();
+    expect(response.sessionId).toBe('session-focused');
+  });
+
+  it('prefers a focused session over one with unknown focus state (old runtime)', async () => {
+    server = startWsIngestServer(new EventStore(), port);
+    const focusedTab = await connectRuntime(port, 'session-focused');
+    sockets.push(focusedTab);
+    sendFocus(focusedTab, 'session-focused', true, true);
+
+    // An old runtime that never reports focus, registering later.
+    sockets.push(await connectRuntime(port, 'session-unknown'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const response = await server.requestSnapshot();
+    expect(response.sessionId).toBe('session-focused');
+  });
+
+  it('binds the session id from a focus update before any event batch', async () => {
+    server = startWsIngestServer(new EventStore(), port);
+    const socket = new WebSocket(`ws://localhost:${String(port)}${WS_PATH}`);
+    sockets.push(socket);
+    await new Promise<void>((resolve, reject) => {
+      socket.on('open', resolve);
+      socket.on('error', reject);
+    });
+    // Only a focus update — no events yet.
+    sendFocus(socket, 'session-early', true, true);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(server.sessionFocus()).toEqual([
+      {
+        sessionId: 'session-early',
+        visible: true,
+        focused: true,
+        url: 'http://localhost:5173/',
+      },
+    ]);
+  });
+
+  it('exposes live focus state per connected session', async () => {
+    server = startWsIngestServer(new EventStore(), port);
+    const tabA = await connectRuntime(port, 'session-a');
+    sockets.push(tabA);
+    sendFocus(tabA, 'session-a', true, false);
+    const tabB = await connectRuntime(port, 'session-b');
+    sockets.push(tabB);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const states = server.sessionFocus();
+    expect(states).toContainEqual({
+      sessionId: 'session-a',
+      visible: true,
+      focused: false,
+      url: 'http://localhost:5173/',
+    });
+    // No focus update yet: state is unknown, not false.
+    expect(states).toContainEqual({
+      sessionId: 'session-b',
+      visible: null,
+      focused: null,
+      url: null,
+    });
   });
 });
 

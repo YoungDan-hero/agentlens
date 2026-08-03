@@ -29,6 +29,14 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function originOf(url: string): string | undefined {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Two-phase fix verification for a previously captured error:
  *
@@ -62,18 +70,27 @@ export async function verifyFix(
 
   const startedAt = Date.now();
   const occurrencesBefore = target.occurrences;
+  // Origin-scoped: an HMR in a different dev server must not count.
+  const origin = originOf(target.url);
 
-  // Phase 1: wait for new code to reach the browser.
-  let codeUpdateAt: number | null = null;
-  while (Date.now() - startedAt < timeoutMs) {
-    if (store.hasCodeUpdateSince(startedAt)) {
-      codeUpdateAt = Date.now();
-      break;
-    }
+  // Phase 1: wait until a code update lands *after the error's latest
+  // occurrence*. Anchoring the baseline at the tool call time instead would
+  // miss the primary workflow entirely: the agent edits the file first,
+  // Vite applies HMR within milliseconds, and only then does the agent call
+  // this tool — the update it is looking for is already in the past.
+  // Both timestamps are browser-clock, so the comparison is skew-free.
+  const baseline = target.timestamp;
+  let codeUpdateAt = store.latestCodeUpdateSince(baseline, origin);
+  while (codeUpdateAt === null && Date.now() - startedAt < timeoutMs) {
     await sleep(pollIntervalMs);
+    codeUpdateAt = store.latestCodeUpdateSince(baseline, origin);
   }
 
   if (codeUpdateAt === null) {
+    // An update that predates the error's latest occurrence deserves a
+    // pointed hint: if that update WAS the fix, the error already outlived
+    // it — the fix did not take.
+    const staleUpdate = store.latestCodeUpdateSince(0, origin);
     return {
       verified: false,
       codeUpdateApplied: false,
@@ -82,13 +99,22 @@ export async function verifyFix(
       occurrencesAfter: store.getErrorByFingerprint(fingerprint)?.occurrences ?? occurrencesBefore,
       observedForMs: Date.now() - startedAt,
       note:
-        'No code update (HMR or reload) reached the browser within the timeout. ' +
-        'Make sure the fix is saved and the dev server compiled it, then retry.',
+        staleUpdate !== null
+          ? 'No code update reached the browser after the error last occurred. ' +
+            'An earlier update did arrive — if that was your fix, the error has ' +
+            'already recurred since it, so the fix did not take.'
+          : 'No code update (HMR or reload) reached the browser within the timeout. ' +
+            'Make sure the fix is saved and the dev server compiled it, then retry.',
     };
   }
 
   // Phase 2: quiet window — any recurrence after the code update fails it.
-  while (Date.now() - codeUpdateAt < quietWindowMs) {
+  // The observation clock starts now, but recurrence is judged against the
+  // update event's own browser-side timestamp: an error that re-fires in the
+  // re-render immediately after HMR lands between the update and this poll,
+  // and must count as a recurrence, not as a stale pre-update occurrence.
+  const observeFrom = Date.now();
+  while (Date.now() - observeFrom < quietWindowMs) {
     const current = store.getErrorByFingerprint(fingerprint);
     if (current && current.timestamp > codeUpdateAt) {
       return {

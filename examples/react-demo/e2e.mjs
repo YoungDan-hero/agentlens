@@ -4,6 +4,7 @@
 import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
 // Dedicated ports so the pipeline never collides with a developer's running
@@ -11,9 +12,11 @@ import { chromium } from 'playwright-core';
 const VITE_PORT = '5274';
 const DAEMON_PORT = '8632';
 const DEMO_URL = `http://localhost:${VITE_PORT}/`;
-const DAEMON_ENTRY = new URL('../../packages/mcp-server/dist/index.js', import.meta.url).pathname;
-const DEMO_DIR = new URL('.', import.meta.url).pathname;
-const APP_FILE = new URL('./src/App.tsx', import.meta.url).pathname;
+const DAEMON_ENTRY = fileURLToPath(
+  new URL('../../packages/mcp-server/dist/index.js', import.meta.url),
+);
+const DEMO_DIR = fileURLToPath(new URL('.', import.meta.url));
+const APP_FILE = fileURLToPath(new URL('./src/App.tsx', import.meta.url));
 
 /** Minimal MCP client speaking newline-delimited JSON-RPC over stdio. */
 class McpClient {

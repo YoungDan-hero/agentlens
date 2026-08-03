@@ -113,4 +113,24 @@ describe('injectVueSourceAttributes', () => {
     const result = injectVueSourceAttributes('<template><i>x</i></template>', FILE);
     expect(result?.map.mappings.length).toBeGreaterThan(0);
   });
+
+  it('attributes custom elements when isCustomElement matches', () => {
+    // Without the predicate, hyphenated tags classify as COMPONENT and the
+    // real DOM element they render would stay unattributed.
+    const sfc = '<template>\n  <my-widget><span>x</span></my-widget>\n</template>';
+
+    const without = injectVueSourceAttributes(sfc, FILE);
+    expect(without?.code).not.toContain(`<my-widget data-agentlens-source`);
+
+    const withPredicate = injectVueSourceAttributes(sfc, FILE, (tag) => tag.startsWith('my-'));
+    expect(withPredicate?.code).toContain(`<my-widget data-agentlens-source="${FILE}:2">`);
+  });
+
+  it('escapes quotes in file names with entities', () => {
+    const result = injectVueSourceAttributes(
+      '<template><button>Go</button></template>',
+      'src/a"b.vue',
+    );
+    expect(result?.code).toContain('data-agentlens-source="src/a&quot;b.vue:1"');
+  });
 });

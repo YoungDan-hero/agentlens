@@ -13,23 +13,32 @@ export function installNavigationCollector(sink: EventSink, context: EventContex
 
   const report = (): void => {
     // pushState can be called with the current URL (state-only updates);
-    // only an actual URL change is a navigation.
-    if (window.location.href === lastUrl) {
-      return;
+    // only an actual URL change is a navigation. Isolated so a reporting
+    // bug can never break the router that called pushState.
+    try {
+      if (window.location.href === lastUrl) {
+        return;
+      }
+      lastUrl = window.location.href;
+      sink.send(buildLifecycleEvent(context, 'navigation'));
+    } catch {
+      // Swallowed by design; navigation itself already happened.
     }
-    lastUrl = window.location.href;
-    sink.send(buildLifecycleEvent(context, 'navigation'));
   };
 
-  const originalPushState = history.pushState.bind(history);
-  const originalReplaceState = history.replaceState.bind(history);
+  // Unbound originals so teardown restores exact function identity instead
+  // of leaving a bound copy behind (which would stack per HMR cycle).
+  /* eslint-disable @typescript-eslint/unbound-method -- restored as-is and invoked via .apply(history) */
+  const originalPushState = history.pushState;
+  const originalReplaceState = history.replaceState;
+  /* eslint-enable @typescript-eslint/unbound-method */
 
-  history.pushState = (...args: Parameters<History['pushState']>) => {
-    originalPushState(...args);
+  history.pushState = function (this: History, ...args: Parameters<History['pushState']>) {
+    originalPushState.apply(this, args);
     report();
   };
-  history.replaceState = (...args: Parameters<History['replaceState']>) => {
-    originalReplaceState(...args);
+  history.replaceState = function (this: History, ...args: Parameters<History['replaceState']>) {
+    originalReplaceState.apply(this, args);
     report();
   };
   window.addEventListener('popstate', report);

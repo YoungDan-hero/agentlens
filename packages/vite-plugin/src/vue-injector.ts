@@ -5,6 +5,7 @@ import { ElementTypes, NodeTypes, parse } from '@vue/compiler-dom';
 import { MagicString } from 'magic-string';
 
 import type { InjectResult } from './attribute-injector';
+import { quoteAttributeValue } from './attribute-injector';
 
 /**
  * Tags that appear in templates but never render as DOM elements themselves:
@@ -34,13 +35,21 @@ function findAttribute(node: ElementNode, name: string): AttributeNode | undefin
  * walked (e.g. a `lang="pug"` template); the caller then leaves the code
  * as-is. This must never break the dev server.
  */
-export function injectVueSourceAttributes(code: string, fileName: string): InjectResult | null {
+export function injectVueSourceAttributes(
+  code: string,
+  fileName: string,
+  isCustomElement?: (tag: string) => boolean,
+): InjectResult | null {
   let root: RootNode;
   try {
     root = parse(code, {
       // Recoverable template errors (work-in-progress code under HMR) must
       // not break the transform; the parser still yields a usable tree.
       onError: () => undefined,
+      // Without this, hyphenated custom elements classify as COMPONENT and
+      // never get attributed even though they render as real DOM elements.
+      // Mirror whatever the user configured for @vitejs/plugin-vue.
+      ...(isCustomElement && { isCustomElement }),
     });
   } catch {
     return null;
@@ -60,7 +69,7 @@ export function injectVueSourceAttributes(code: string, fileName: string): Injec
       const location = `${fileName}:${String(node.loc.start.line)}`;
       source.appendLeft(
         node.loc.start.offset + node.tag.length + 1,
-        ` ${SOURCE_ATTRIBUTE}=${JSON.stringify(location)}`,
+        ` ${SOURCE_ATTRIBUTE}=${quoteAttributeValue(location)}`,
       );
     }
     // Descend regardless of tag type: slot content inside a component tag

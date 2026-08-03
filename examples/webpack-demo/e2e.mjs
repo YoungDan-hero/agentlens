@@ -3,6 +3,7 @@
 // Usage: pnpm --filter webpack-demo e2e
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
 // Dedicated ports so this never collides with the react-demo E2E (8632/5274)
@@ -10,8 +11,10 @@ import { chromium } from 'playwright-core';
 const WEBPACK_PORT = '5275';
 const DAEMON_PORT = '8633';
 const DEMO_URL = `http://127.0.0.1:${WEBPACK_PORT}/`;
-const DAEMON_ENTRY = new URL('../../packages/mcp-server/dist/index.js', import.meta.url).pathname;
-const DEMO_DIR = new URL('.', import.meta.url).pathname;
+const DAEMON_ENTRY = fileURLToPath(
+  new URL('../../packages/mcp-server/dist/index.js', import.meta.url),
+);
+const DEMO_DIR = fileURLToPath(new URL('.', import.meta.url));
 
 /** Minimal MCP client speaking newline-delimited JSON-RPC over stdio. */
 class McpClient {
