@@ -290,6 +290,26 @@ async function main() {
       'verify_fix: error events expose a stable fingerprint',
     );
 
+    // Root-cause bundle: one call must correlate the error with the click
+    // that triggered it, plus the session's performance picture.
+    const context = await client.callTool('get_error_context', {
+      fingerprint: uncaught.fingerprint,
+    });
+    assert(
+      context.error?.fingerprint === uncaught.fingerprint,
+      'error_context: resolves the folded error record by fingerprint',
+    );
+    const lastTrigger = context.precedingInteractions?.at(-1);
+    assert(
+      lastTrigger?.target.id === 'btn-error' &&
+        /^src\/App\.vue:\d+$/.test(lastTrigger.target.source ?? ''),
+      'error_context: triggering click surfaced with source attribution',
+    );
+    assert(
+      context.performance?.webVitals !== undefined,
+      'error_context: session Web Vitals included in the bundle',
+    );
+
     // Negative path: without any code change, verification must not pass.
     const noUpdate = await client.callTool('verify_fix', {
       fingerprint: uncaught.fingerprint,

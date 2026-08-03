@@ -22,6 +22,7 @@ Register it in your MCP client (e.g. Cursor's `mcp.json`):
 | Tool                       | Purpose                                                                                                                |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `get_page_health`          | Overview scoped to the most recent session: distinct errors (with folded occurrence counts), failed requests, activity |
+| `get_error_context`        | One-call root-cause bundle: the folded error, preceding interactions, related network/console signals, session vitals  |
 | `get_recent_events`        | Drill-down query over captured events with type/session/time/limit filters                                             |
 | `list_sessions`            | Known page sessions (one per page load / tab), most recently active first                                              |
 | `verify_fix`               | Closes the loop after a code edit: waits for HMR/reload, then reports whether the error fingerprint recurred           |

@@ -78,13 +78,14 @@ async function callJson(client: Client, name: string, args?: Record<string, unkn
 }
 
 describe('createMcpServer', () => {
-  it('registers all seven tools when an ingest server is provided', async () => {
+  it('registers all eight tools when an ingest server is provided', async () => {
     const client = await connect(new EventStore(), {
       requestSnapshot: () => Promise.reject(new Error('unused')),
     });
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      'get_error_context',
       'get_interaction_timeline',
       'get_layout_snapshot',
       'get_page_health',
@@ -100,7 +101,7 @@ describe('createMcpServer', () => {
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name)).not.toContain('get_layout_snapshot');
-    expect(tools).toHaveLength(6);
+    expect(tools).toHaveLength(7);
   });
 
   it('get_page_health summarizes the store', async () => {
@@ -167,6 +168,22 @@ describe('createMcpServer', () => {
     const longTasks = result.longTasks as { count: number; maxMs: number };
     expect(longTasks.count).toBe(1);
     expect(longTasks.maxMs).toBe(180);
+  });
+
+  it('get_error_context bundles the error with its preceding interaction', async () => {
+    const store = new EventStore();
+    const interaction = makeInteraction();
+    store.add(interaction);
+    store.add(makeError({ timestamp: interaction.timestamp + 100 }));
+    const client = await connect(store);
+
+    const context = await callJson(client, 'get_error_context');
+
+    expect((context.error as { message: string }).message).toBe('boom');
+    const interactions = context.precedingInteractions as { target: { source: string } }[];
+    expect(interactions).toHaveLength(1);
+    expect(interactions[0]?.target.source).toBe('src/App.tsx:10');
+    expect(context.performance).toBeDefined();
   });
 
   it('verify_fix reports an unknown fingerprint as an actionable error', async () => {

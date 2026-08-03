@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { EventStore } from './store';
+import { buildErrorContext } from './error-context';
 import { summarizePerformance } from './performance-summary';
 import { buildTimeline } from './timeline';
 import { verifyFix } from './verify-fix';
@@ -172,6 +173,47 @@ export function createMcpServer(
         ...summarizePerformance(events),
       });
     },
+  );
+
+  server.registerTool(
+    'get_error_context',
+    {
+      title: 'Get error root-cause context',
+      description:
+        'One-call root-cause bundle for an error: the folded error record with ' +
+        'source-mapped frames, the user interactions preceding its latest occurrence ' +
+        '(each with the source location of the element), network requests and console ' +
+        'warnings/errors in the same time window, and the session\u2019s Web Vitals. ' +
+        'Reference the error by fingerprint or event id (both from get_recent_events); ' +
+        'without a reference it explains the most recent error. Prefer this over ' +
+        'correlating get_recent_events / get_interaction_timeline calls by hand.',
+      inputSchema: {
+        fingerprint: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('Fingerprint of the folded error record'),
+        errorId: z.string().min(1).optional().describe('Event id of the error'),
+        lookbackMs: z
+          .number()
+          .int()
+          .min(1000)
+          .max(120_000)
+          .optional()
+          .describe('Cause-search window before the error. Defaults to 15000.'),
+      },
+    },
+    (args) =>
+      jsonResult(
+        buildErrorContext(
+          store,
+          {
+            ...(args.fingerprint !== undefined && { fingerprint: args.fingerprint }),
+            ...(args.errorId !== undefined && { errorId: args.errorId }),
+          },
+          { ...(args.lookbackMs !== undefined && { lookbackMs: args.lookbackMs }) },
+        ),
+      ),
   );
 
   server.registerTool(

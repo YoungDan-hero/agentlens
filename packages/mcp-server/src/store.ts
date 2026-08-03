@@ -138,6 +138,16 @@ export class EventStore {
   }
 
   /**
+   * Looks up an error by its event id. Folded repeats keep the first
+   * occurrence's id, so the id an agent saw in any query stays valid.
+   */
+  getErrorById(id: string): ErrorEvent | undefined {
+    return this.events.find(
+      (event): event is ErrorEvent => event.type === 'error' && event.id === id,
+    );
+  }
+
+  /**
    * Whether new code reached the browser after `sinceMs` — either a hot
    * module update or a full page (re)load.
    */

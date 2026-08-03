@@ -38,11 +38,12 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 - **Session isolation** — every page load / tab is a separate session; queries scope to the most recently active one by default
 - **Source attribution** — the Vite plugin stamps Vue SFC template elements and JSX host elements with `data-agentlens-source="file:line"`, so DOM nodes, clicks and layout boxes all trace back to code
 
-**Seven MCP tools** for the agent:
+**Eight MCP tools** for the agent:
 
 | Tool                       | What it answers                                                      |
 | -------------------------- | -------------------------------------------------------------------- |
 | `get_page_health`          | "Is the page healthy right now?" — errors, failed requests, activity |
+| `get_error_context`        | "Why did this error happen?" — one-call root-cause bundle            |
 | `get_recent_events`        | "Show me the errors / logs / requests" — filterable drill-down       |
 | `get_interaction_timeline` | "What did the user do to cause this?" — cause-and-effect grouping    |
 | `get_layout_snapshot`      | "What does the page look like?" — structured box tree, no screenshot |
@@ -53,6 +54,7 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 ## Use cases
 
 - **Autonomous debugging** — the agent edits code, checks `get_page_health`, sees a new error with a source-mapped stack pointing at `src/App.vue:42`, fixes it, and confirms with `verify_fix` — without you touching DevTools.
+- **Root-cause analysis in one call** — `get_error_context` bundles an error with the interactions that preceded it (each with the source location of the element), the network requests and console warnings in the same time window, and the session's Web Vitals — no manual correlation across tools.
 - **"It's broken after my change"** — `get_interaction_timeline` shows the click on the submit button, the 500 response it triggered, and the unhandled rejection that followed, as one causal group.
 - **Layout and styling issues** — `get_layout_snapshot` gives the agent a structured view of every box (position, size, visibility, overflow, text) with the source line that rendered it, so "the sidebar overflows" becomes an addressable fact instead of a guess.
 - **Performance regressions** — `get_performance` reports the current Web Vitals with their web.dev ratings and the long-task pressure, so "the page feels slow" turns into "INP is 620 ms (poor) and there are 14 long tasks totalling 2.1 s".
@@ -167,7 +169,7 @@ init({
 
 One caveat inherent to this pattern: collectors only exist once the dynamically imported chunk has loaded, so signals fired synchronously during application startup are not captured. This exact integration is exercised by an automated smoke test in [`examples/webpack-demo`](./examples/webpack-demo).
 
-Everything above works with manual setup — errors, console, network, performance, interactions, layout snapshots and all seven MCP tools — with two degradations:
+Everything above works with manual setup — errors, console, network, performance, interactions, layout snapshots and all eight MCP tools — with two degradations:
 
 - **Source attribution** — `data-agentlens-source` is stamped by the Vite plugin's template/JSX transform, so without it, interactions and layout boxes describe elements by tag / id / class instead of `file:line`.
 - **`verify_fix`** — the daemon accepts either an HMR signal or a full page reload as proof that new code reached the browser. Reloads work out of the box; to get the faster HMR path, wire your bundler's hot API to `reportHmrUpdate`:
@@ -215,6 +217,8 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow.
 - [x] M2 — structured layout snapshots, `data-source` attribution, `verify_fix`
 - [x] M3 — interaction timeline (cause-and-effect grouping of user actions and their effects)
 - [x] M4 — first-class Vue support: SFC template source attribution, Vue demo in the E2E matrix
+- [x] M5a — one-call error root-cause bundle (`get_error_context`)
+- [ ] M5b — browser action channel: agent-driven in-session automated testing (opt-in)
 
 ## Privacy & data safety
 
