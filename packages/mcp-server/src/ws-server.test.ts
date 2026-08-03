@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 
-import type { ErrorEvent, LifecycleEvent, SnapshotResponse } from '@agentlensjs/shared';
-import { PROTOCOL_VERSION, WS_PATH, isSnapshotRequest } from '@agentlensjs/shared';
+import type {
+  ActionResult,
+  ErrorEvent,
+  LifecycleEvent,
+  SnapshotResponse,
+} from '@agentlensjs/shared';
+import { PROTOCOL_VERSION, WS_PATH, isActionRequest, isSnapshotRequest } from '@agentlensjs/shared';
 import type { StackResolver } from './stack-resolver';
 import { EventStore } from './store';
 import { startWsIngestServer, type WsIngestServer } from './ws-server';
@@ -38,7 +43,21 @@ function makeSnapshotResponse(requestId: string, sessionId: string): SnapshotRes
   };
 }
 
-/** A fake browser runtime: connects, registers a session, answers snapshots. */
+function makeActionResult(requestId: string, sessionId: string): ActionResult {
+  return {
+    kind: 'action-result',
+    requestId,
+    sessionId,
+    ok: true,
+    error: null,
+    target: { tag: 'button', id: 'go', text: 'Go', source: 'src/App.vue:3' },
+    effects: { errors: 1, failedRequests: 0, consoleErrors: 0 },
+    settledAfterMs: 120,
+    settleTimedOut: false,
+  };
+}
+
+/** A fake browser runtime: connects, registers a session, answers requests. */
 async function connectRuntime(port: number, sessionId: string): Promise<WebSocket> {
   const socket = new WebSocket(`ws://localhost:${String(port)}${WS_PATH}`);
   await new Promise<void>((resolve, reject) => {
@@ -49,6 +68,9 @@ async function connectRuntime(port: number, sessionId: string): Promise<WebSocke
     const message: unknown = JSON.parse((raw as Buffer).toString('utf8'));
     if (isSnapshotRequest(message)) {
       socket.send(JSON.stringify(makeSnapshotResponse(message.requestId, sessionId)));
+    }
+    if (isActionRequest(message)) {
+      socket.send(JSON.stringify(makeActionResult(message.requestId, sessionId)));
     }
   });
   socket.send(
@@ -115,6 +137,63 @@ describe('ws ingest server snapshots', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     await expect(server.requestSnapshot(undefined, 150)).rejects.toThrow('did not answer');
+  });
+});
+
+describe('ws ingest server actions', () => {
+  let server: WsIngestServer | null = null;
+  const sockets: WebSocket[] = [];
+  const port = 19_631 + Math.floor(Math.random() * 1000);
+
+  afterEach(async () => {
+    for (const socket of sockets) {
+      socket.close();
+    }
+    sockets.length = 0;
+    await server?.close();
+    server = null;
+  });
+
+  it('rejects when no browser is connected', async () => {
+    server = startWsIngestServer(new EventStore(), port);
+    await expect(server.requestAction({ action: 'click' })).rejects.toThrow('No browser session');
+  });
+
+  it('round-trips an action request to the targeted session', async () => {
+    server = startWsIngestServer(new EventStore(), port);
+    sockets.push(await connectRuntime(port, 'session-a'));
+    sockets.push(await connectRuntime(port, 'session-b'));
+
+    const result = await server.requestAction(
+      { action: 'click', target: { selector: '#go' } },
+      'session-a',
+    );
+    expect(result.ok).toBe(true);
+    expect(result.sessionId).toBe('session-a');
+    expect(result.effects.errors).toBe(1);
+    expect(result.target?.source).toBe('src/App.vue:3');
+
+    await expect(server.requestAction({ action: 'click' }, 'session-missing')).rejects.toThrow(
+      'session-missing',
+    );
+  });
+
+  it('times out when the browser never answers an action', async () => {
+    server = startWsIngestServer(new EventStore(), port);
+    const socket = new WebSocket(`ws://localhost:${String(port)}${WS_PATH}`);
+    await new Promise<void>((resolve, reject) => {
+      socket.on('open', resolve);
+      socket.on('error', reject);
+    });
+    socket.send(
+      JSON.stringify({ protocolVersion: PROTOCOL_VERSION, events: [makeLifecycle('s')] }),
+    );
+    sockets.push(socket);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    await expect(server.requestAction({ action: 'click' }, undefined, 150)).rejects.toThrow(
+      'did not answer the action request',
+    );
   });
 });
 

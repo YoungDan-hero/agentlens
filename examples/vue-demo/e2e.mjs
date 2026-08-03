@@ -93,14 +93,14 @@ function assert(condition, label) {
 }
 
 async function main() {
-  console.log('1/6 Starting AgentLens daemon...');
+  console.log('1/7 Starting AgentLens daemon...');
   const daemon = spawn('node', [DAEMON_ENTRY], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: { ...process.env, AGENTLENS_PORT: DAEMON_PORT },
   });
   daemon.stderr.on('data', (d) => process.stdout.write(`      [daemon] ${d}`));
 
-  console.log('2/6 Starting Vite dev server...');
+  console.log('2/7 Starting Vite dev server...');
   // Spawn the vite entry directly (not via `pnpm exec`) so kill() reaches
   // the actual server process instead of a wrapper.
   const vite = spawn(
@@ -114,7 +114,7 @@ async function main() {
   );
   await waitForHttp(DEMO_URL, 30_000);
 
-  console.log('3/6 Launching headless Chrome and triggering signals...');
+  console.log('3/7 Launching headless Chrome and triggering signals...');
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   const originalAppSource = await readFile(APP_FILE, 'utf8');
   try {
@@ -147,7 +147,7 @@ async function main() {
       await sleep(200);
     }
 
-    console.log('4/6 Querying the daemon over MCP...');
+    console.log('4/7 Querying the daemon over MCP...');
     const client = new McpClient(daemon);
     await client.request('initialize', {
       protocolVersion: '2025-06-18',
@@ -179,7 +179,7 @@ async function main() {
     const network = await client.callTool('get_recent_events', { type: 'network' });
     const lifecycle = await client.callTool('get_recent_events', { type: 'lifecycle' });
 
-    console.log('5/6 Asserting the captured signals...');
+    console.log('5/7 Asserting the captured signals...');
     assert(
       lifecycle.some((e) => e.phase === 'load'),
       'lifecycle: page load event captured',
@@ -283,7 +283,72 @@ async function main() {
       'timeline: uncaught error attributed to the click that caused it',
     );
 
-    console.log('6/6 Verifying the fix loop (verify_fix + real HMR)...');
+    console.log('6/7 Exercising the browser action channel (perform_action)...');
+    // The channel is opt-in (allowActions: true in vite.config.ts). Wait
+    // long enough for the executor's user-activity window (1.5s after the
+    // trusted Playwright clicks) to expire, not just for the event stream
+    // to quiet down.
+    const idle = await client.callTool('wait_for_idle', { quietMs: 2_000, timeoutMs: 20_000 });
+    assert(
+      idle.idle === true,
+      `actions: wait_for_idle reports a settled page (${JSON.stringify(idle)})`,
+    );
+
+    // "User is active" refusals are expected agent workflow: retry shortly.
+    const performWithRetry = async (args) => {
+      for (let attempt = 0; ; attempt += 1) {
+        const result = await client.callTool('perform_action', args);
+        if (result.ok || attempt >= 3 || !String(result.error).includes('actively interacting')) {
+          return result;
+        }
+        await sleep(800);
+      }
+    };
+
+    // Type into the v-model bound input: the synthetic input event must
+    // drive Vue reactivity, observable in the real DOM.
+    const typed = await performWithRetry({
+      action: 'input',
+      selector: '#visitor-name',
+      value: 'Ada Lovelace',
+    });
+    assert(typed.ok === true, `actions: input action succeeded (${String(typed.error)})`);
+    const greeting = await page.textContent('#visitor-greeting');
+    assert(
+      greeting?.includes('Hello, Ada Lovelace!') === true,
+      `actions: v-model updated through synthetic input (got "${String(greeting)}")`,
+    );
+
+    // Click through the source-attribution locator — the most stable way
+    // for an agent to address an element — and check the executor reports
+    // the console.error the click triggered as an effect.
+    const consoleSource = await page.getAttribute('#btn-console', 'data-agentlens-source');
+    const clicked = await performWithRetry({
+      action: 'click',
+      source: consoleSource,
+    });
+    assert(
+      clicked.ok === true && clicked.target?.id === 'btn-console',
+      `actions: click via source locator hit the right element (${JSON.stringify(clicked.target)})`,
+    );
+    assert(
+      clicked.effects?.consoleErrors >= 1,
+      `actions: console.error effect attributed to the action (${JSON.stringify(clicked.effects)})`,
+    );
+
+    // Audit trail: agent-driven interactions must be distinguishable from
+    // the human clicks Playwright performed earlier.
+    const interactions = await client.callTool('get_recent_events', { type: 'interaction' });
+    assert(
+      interactions.some((e) => e.synthetic === true && e.target.id === 'btn-console'),
+      'actions: synthetic interaction recorded with the audit marker',
+    );
+    assert(
+      interactions.some((e) => e.target.id === 'btn-error' && e.synthetic === undefined),
+      'actions: human clicks stay unmarked',
+    );
+
+    console.log('7/7 Verifying the fix loop (verify_fix + real HMR)...');
     const uncaught = errors.find((e) => e.subtype === 'uncaught');
     assert(
       typeof uncaught?.fingerprint === 'string' && uncaught.fingerprint.length > 0,

@@ -34,6 +34,7 @@ agentlens({
   enabled: true, // force-disable injection when needed
   captureBodies: false, // opt in to capture request/response bodies (redacted)
   redactKeys: ['idCard', 'mobile'], // project-specific sensitive keys, on top of the built-ins
+  allowActions: false, // opt in to let the agent drive the page via perform_action
 });
 ```
 

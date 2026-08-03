@@ -72,6 +72,7 @@ const interactionEventSchema = z.object({
     text: z.string().nullable(),
     source: z.string().nullable(),
   }),
+  synthetic: z.boolean().optional(),
 });
 
 const performanceEventSchema = z.object({
@@ -103,6 +104,10 @@ function toProtocolEvent(event: z.infer<typeof eventSchema>): AgentLensEvent {
   if (event.type === 'error') {
     const { fingerprint, ...rest } = event;
     return fingerprint === undefined ? rest : { ...rest, fingerprint };
+  }
+  if (event.type === 'interaction') {
+    const { synthetic, ...rest } = event;
+    return synthetic === undefined ? rest : { ...rest, synthetic };
   }
   return event;
 }

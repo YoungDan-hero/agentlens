@@ -6,7 +6,8 @@ import { buildErrorContext } from './error-context';
 import { summarizePerformance } from './performance-summary';
 import { buildTimeline } from './timeline';
 import { verifyFix } from './verify-fix';
-import type { WsIngestServer } from './ws-server';
+import { waitForIdle } from './wait-for-idle';
+import type { ActionCommand, WsIngestServer } from './ws-server';
 
 const DEFAULT_HEALTH_WINDOW_MS = 5 * 60 * 1000;
 
@@ -28,7 +29,7 @@ function jsonResult(payload: unknown): TextResult {
 export function createMcpServer(
   store: EventStore,
   version: string,
-  ingest?: Pick<WsIngestServer, 'requestSnapshot'>,
+  ingest?: Pick<WsIngestServer, 'requestSnapshot' | 'requestAction'>,
 ): McpServer {
   const server = new McpServer({ name: 'agentlens', version });
 
@@ -252,7 +253,120 @@ export function createMcpServer(
       ),
   );
 
+  server.registerTool(
+    'wait_for_idle',
+    {
+      title: 'Wait for the page to go idle',
+      description:
+        'Blocks until the session\u2019s event stream has been quiet for quietMs (or ' +
+        'timeoutMs elapses). Use it after perform_action or a code change to let the ' +
+        'app finish reacting before asserting state with other tools.',
+      inputSchema: {
+        sessionId: z
+          .string()
+          .optional()
+          .describe('Scope to a page session; defaults to the most recently active one'),
+        quietMs: z
+          .number()
+          .int()
+          .min(100)
+          .max(10_000)
+          .optional()
+          .describe('Quiet window that counts as idle. Defaults to 1000.'),
+        timeoutMs: z
+          .number()
+          .int()
+          .min(500)
+          .max(60_000)
+          .optional()
+          .describe('Max wait. Defaults to 10000.'),
+      },
+    },
+    async (args) =>
+      jsonResult(
+        await waitForIdle(store, {
+          ...(args.sessionId !== undefined && { sessionId: args.sessionId }),
+          ...(args.quietMs !== undefined && { quietMs: args.quietMs }),
+          ...(args.timeoutMs !== undefined && { timeoutMs: args.timeoutMs }),
+        }),
+      ),
+  );
+
   if (ingest) {
+    server.registerTool(
+      'perform_action',
+      {
+        title: 'Perform a page action',
+        description:
+          'Drives the running page in the user\u2019s real browser session: click, type ' +
+          'into an input, pick a select option, scroll, or navigate within the same ' +
+          'origin. Locate elements by data-agentlens-source ("file:line", most stable), ' +
+          'CSS selector, or visible text. The runtime dispatches synthetic events ' +
+          '(React/Vue compatible), waits for the page to settle, and reports the ' +
+          'errors, failed requests and console errors the action triggered — combine ' +
+          'with get_recent_events or verify_fix to close the test loop. Requires the ' +
+          'app to opt in via allowActions: true; refused while the user is actively ' +
+          'interacting (retry shortly). Every synthetic interaction is captured with a ' +
+          'synthetic: true marker as an audit trail.',
+        inputSchema: {
+          action: z.enum(['click', 'input', 'select', 'scroll', 'navigate']).describe('What to do'),
+          source: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('Locate by data-agentlens-source value, e.g. "src/App.vue:42"'),
+          selector: z.string().min(1).optional().describe('Locate by CSS selector'),
+          text: z.string().min(1).optional().describe('Locate by visible text (deepest match)'),
+          nth: z
+            .number()
+            .int()
+            .min(0)
+            .optional()
+            .describe('Zero-based index when the locator matches multiple elements'),
+          value: z
+            .string()
+            .optional()
+            .describe('Text to type (input, empty string clears) or option value/label (select)'),
+          url: z.string().min(1).optional().describe('Same-origin URL or path (navigate)'),
+          x: z.number().optional().describe('Scroll x coordinate (scroll without target)'),
+          y: z.number().optional().describe('Scroll y coordinate (scroll without target)'),
+          sessionId: z
+            .string()
+            .optional()
+            .describe('Target a specific page session; defaults to the most active one'),
+        },
+      },
+      async (args) => {
+        const target =
+          args.source !== undefined || args.selector !== undefined || args.text !== undefined
+            ? {
+                ...(args.source !== undefined && { source: args.source }),
+                ...(args.selector !== undefined && { selector: args.selector }),
+                ...(args.text !== undefined && { text: args.text }),
+                ...(args.nth !== undefined && { nth: args.nth }),
+              }
+            : undefined;
+        const command: ActionCommand = {
+          action: args.action,
+          ...(target !== undefined && { target }),
+          ...(args.value !== undefined && { value: args.value }),
+          ...(args.url !== undefined && { url: args.url }),
+          ...(args.x !== undefined && { x: args.x }),
+          ...(args.y !== undefined && { y: args.y }),
+        };
+        try {
+          const {
+            kind: _kind,
+            requestId: _requestId,
+            ...result
+          } = await ingest.requestAction(command, args.sessionId);
+          return jsonResult(result);
+        } catch (error) {
+          return jsonResult({ error: error instanceof Error ? error.message : String(error) });
+        }
+      },
+    );
+
     server.registerTool(
       'get_layout_snapshot',
       {

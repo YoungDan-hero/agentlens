@@ -29,10 +29,16 @@ Register it in your MCP client (e.g. Cursor's `mcp.json`):
 | `get_layout_snapshot`      | Live structured layout tree of the page: boxes, visibility, overflow, text and per-element source attribution          |
 | `get_interaction_timeline` | Cause-and-effect view: user interactions grouped with the errors, requests and logs they triggered                     |
 | `get_performance`          | Current Web Vitals (FCP, LCP, CLS, INP, TTFB with web.dev ratings) and long-task pressure for a session                |
+| `perform_action`           | Drives the live page — click, type, select, scroll, same-origin navigate — when the app opts in with `allowActions`    |
+| `wait_for_idle`            | Blocks until the session's event stream has been quiet for a configurable window (or a timeout elapses)                |
 
 ### Fix verification workflow
 
 Every captured error carries a daemon-assigned `fingerprint`. After editing code, an agent calls `verify_fix` with that fingerprint; the tool waits for the new code to reach the browser (hot module update or full reload, reported by the runtime), then observes a quiet window for recurrence. Interaction-triggered errors still need the interaction to be re-triggered for full certainty — the result says so explicitly.
+
+### Browser action channel
+
+`perform_action` sends an action request down the same WebSocket the runtime uses for ingest; the runtime executes it with synthetic DOM events (React and Vue v-model compatible), waits for the page to settle, and reports the element it acted on plus the errors, failed requests and console errors the action triggered. The channel is off unless the app sets `allowActions: true`; actions are refused while the user is actively interacting, run one at a time, never navigate cross-origin, and every synthetic interaction is stored with a `synthetic: true` audit marker.
 
 ### Ingest security
 

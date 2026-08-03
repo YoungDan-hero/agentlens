@@ -31,6 +31,15 @@ export interface AgentLensPluginOptions {
    * @example ['idCard', 'mobile']
    */
   redactKeys?: string[];
+  /**
+   * Allow the daemon's `perform_action` tool to drive the page (click,
+   * type, select, scroll, same-origin navigation). Off by default: this
+   * turns AgentLens from an observer into an actuator, so it must be an
+   * explicit opt-in. Actions yield to real user input and every synthetic
+   * interaction is recorded with a `synthetic` audit marker.
+   * @default false
+   */
+  allowActions?: boolean;
 }
 
 export const VIRTUAL_MODULE_ID = 'virtual:agentlens';
@@ -45,8 +54,9 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
   const port = options.port ?? DEFAULT_WS_PORT;
   const captureBodies = options.captureBodies ?? false;
   const redactKeys = options.redactKeys ?? [];
+  const allowActions = options.allowActions ?? false;
   const endpoint = `ws://localhost:${String(port)}${WS_PATH}`;
-  const initOptions = JSON.stringify({ endpoint, captureBodies, redactKeys });
+  const initOptions = JSON.stringify({ endpoint, captureBodies, redactKeys, allowActions });
 
   let root = process.cwd();
 

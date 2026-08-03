@@ -1,5 +1,11 @@
-import { isSnapshotResponse, PROTOCOL_VERSION, WS_PATH } from '@agentlensjs/shared';
-import type { AgentLensEvent, SnapshotRequest, SnapshotResponse } from '@agentlensjs/shared';
+import { isActionResult, isSnapshotResponse, PROTOCOL_VERSION, WS_PATH } from '@agentlensjs/shared';
+import type {
+  ActionRequest,
+  ActionResult,
+  AgentLensEvent,
+  SnapshotRequest,
+  SnapshotResponse,
+} from '@agentlensjs/shared';
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { RawData } from 'ws';
@@ -11,8 +17,14 @@ import type { EventStore } from './store';
 import { parseEvent } from './validate';
 
 const SNAPSHOT_TIMEOUT_MS = 5000;
+// Must exceed the runtime's settle ceiling (5s) so a slow-but-successful
+// action reports its result instead of racing the timeout.
+const ACTION_TIMEOUT_MS = 10_000;
 const BIND_RETRY_DELAY_MS = 500;
 const BIND_MAX_RETRIES = 10;
+
+/** An action request minus the envelope fields the server fills in. */
+export type ActionCommand = Omit<ActionRequest, 'kind' | 'requestId'>;
 
 export interface WsIngestServer {
   /**
@@ -22,6 +34,18 @@ export interface WsIngestServer {
    * does not answer within the timeout.
    */
   requestSnapshot: (sessionId?: string, timeoutMs?: number) => Promise<SnapshotResponse>;
+  /**
+   * Asks a connected browser session to perform a page action. The runtime
+   * answers with the outcome after the page settles; refusals (actions
+   * disabled, user active, bad target) come back as `ok: false` results,
+   * not rejections. Rejects only on transport problems: no connected
+   * browser or no answer within the timeout.
+   */
+  requestAction: (
+    command: ActionCommand,
+    sessionId?: string,
+    timeoutMs?: number,
+  ) => Promise<ActionResult>;
   close: () => Promise<void>;
 }
 
@@ -112,6 +136,10 @@ export function startWsIngestServer(
     string,
     { resolve: (response: SnapshotResponse) => void; timer: NodeJS.Timeout }
   >();
+  const pendingActions = new Map<
+    string,
+    { resolve: (result: ActionResult) => void; timer: NodeJS.Timeout }
+  >();
 
   let wss: WebSocketServer;
   let bindAttempts = 0;
@@ -142,6 +170,16 @@ export function startWsIngestServer(
         const pending = pendingSnapshots.get(message.requestId);
         if (pending) {
           pendingSnapshots.delete(message.requestId);
+          clearTimeout(pending.timer);
+          pending.resolve(message);
+        }
+        return;
+      }
+
+      if (isActionResult(message)) {
+        const pending = pendingActions.get(message.requestId);
+        if (pending) {
+          pendingActions.delete(message.requestId);
           clearTimeout(pending.timer);
           pending.resolve(message);
         }
@@ -304,6 +342,35 @@ export function startWsIngestServer(
         socket.send(JSON.stringify(request));
       });
     },
+    requestAction: (command, sessionId, timeoutMs: number = ACTION_TIMEOUT_MS) => {
+      const socket = pickSocket(sessionId);
+      if (!socket) {
+        return Promise.reject(
+          new Error(
+            sessionId === undefined
+              ? 'No browser session is connected to the daemon.'
+              : `No connected browser matches session "${sessionId}".`,
+          ),
+        );
+      }
+      const request: ActionRequest = {
+        ...command,
+        kind: 'action-request',
+        requestId: randomUUID(),
+      };
+      return new Promise<ActionResult>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pendingActions.delete(request.requestId);
+          reject(
+            new Error(
+              'The browser did not answer the action request in time — the page may have navigated or closed.',
+            ),
+          );
+        }, timeoutMs);
+        pendingActions.set(request.requestId, { resolve, timer });
+        socket.send(JSON.stringify(request));
+      });
+    },
     close: () =>
       new Promise((resolve, reject) => {
         closed = true;
@@ -315,6 +382,10 @@ export function startWsIngestServer(
           clearTimeout(pending.timer);
         }
         pendingSnapshots.clear();
+        for (const pending of pendingActions.values()) {
+          clearTimeout(pending.timer);
+        }
+        pendingActions.clear();
         for (const socket of connections.keys()) {
           socket.close();
         }

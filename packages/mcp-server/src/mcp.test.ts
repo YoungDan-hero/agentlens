@@ -58,7 +58,7 @@ function makePerformance(overrides: Partial<PerformanceEvent> = {}): Performance
 /** Wires a real MCP client to the server over an in-memory transport. */
 async function connect(
   store: EventStore,
-  ingest?: Pick<WsIngestServer, 'requestSnapshot'>,
+  ingest?: Pick<WsIngestServer, 'requestSnapshot' | 'requestAction'>,
 ): Promise<Client> {
   const server = createMcpServer(store, '0.0.0-test', ingest);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -78,9 +78,10 @@ async function callJson(client: Client, name: string, args?: Record<string, unkn
 }
 
 describe('createMcpServer', () => {
-  it('registers all eight tools when an ingest server is provided', async () => {
+  it('registers all ten tools when an ingest server is provided', async () => {
     const client = await connect(new EventStore(), {
       requestSnapshot: () => Promise.reject(new Error('unused')),
+      requestAction: () => Promise.reject(new Error('unused')),
     });
     const { tools } = await client.listTools();
 
@@ -92,16 +93,19 @@ describe('createMcpServer', () => {
       'get_performance',
       'get_recent_events',
       'list_sessions',
+      'perform_action',
       'verify_fix',
+      'wait_for_idle',
     ]);
   });
 
-  it('omits get_layout_snapshot without an ingest server', async () => {
+  it('omits the browser-channel tools without an ingest server', async () => {
     const client = await connect(new EventStore());
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name)).not.toContain('get_layout_snapshot');
-    expect(tools).toHaveLength(7);
+    expect(tools.map((tool) => tool.name)).not.toContain('perform_action');
+    expect(tools).toHaveLength(8);
   });
 
   it('get_page_health summarizes the store', async () => {
@@ -197,10 +201,67 @@ describe('createMcpServer', () => {
   it('get_layout_snapshot surfaces ingest failures as an error payload', async () => {
     const client = await connect(new EventStore(), {
       requestSnapshot: () => Promise.reject(new Error('No browser session is connected.')),
+      requestAction: () => Promise.reject(new Error('unused')),
     });
 
     const result = await callJson(client, 'get_layout_snapshot');
 
     expect(result.error).toBe('No browser session is connected.');
+  });
+
+  it('perform_action forwards the command and strips the wire envelope', async () => {
+    let received: unknown;
+    const client = await connect(new EventStore(), {
+      requestSnapshot: () => Promise.reject(new Error('unused')),
+      requestAction: (command, sessionId) => {
+        received = { command, sessionId };
+        return Promise.resolve({
+          kind: 'action-result' as const,
+          requestId: 'r1',
+          sessionId: 'session-1',
+          ok: true,
+          error: null,
+          target: { tag: 'button', id: 'go', text: 'Go', source: 'src/App.vue:3' },
+          effects: { errors: 0, failedRequests: 0, consoleErrors: 0 },
+          settledAfterMs: 90,
+          settleTimedOut: false,
+        });
+      },
+    });
+
+    const result = await callJson(client, 'perform_action', {
+      action: 'input',
+      selector: '#name',
+      value: 'Ada',
+    });
+
+    expect(received).toEqual({
+      command: { action: 'input', target: { selector: '#name' }, value: 'Ada' },
+      sessionId: undefined,
+    });
+    expect(result.ok).toBe(true);
+    // Wire-envelope fields are daemon-internal and must not reach the agent.
+    expect(result.kind).toBeUndefined();
+    expect(result.requestId).toBeUndefined();
+  });
+
+  it('perform_action surfaces transport failures as an error payload', async () => {
+    const client = await connect(new EventStore(), {
+      requestSnapshot: () => Promise.reject(new Error('unused')),
+      requestAction: () => Promise.reject(new Error('No browser session is connected.')),
+    });
+
+    const result = await callJson(client, 'perform_action', { action: 'click', selector: '#x' });
+
+    expect(result.error).toBe('No browser session is connected.');
+  });
+
+  it('wait_for_idle reports idle for a quiet store', async () => {
+    const client = await connect(new EventStore());
+
+    const result = await callJson(client, 'wait_for_idle', { quietMs: 100 });
+
+    expect(result.idle).toBe(true);
+    expect(result.lastEventAt).toBeNull();
   });
 });

@@ -46,6 +46,14 @@ describe('parseEvent', () => {
         subtype: 'click',
         target: { tag: 'button', id: 'save', text: 'Save', source: 'src/App.tsx:1' },
       },
+      {
+        ...base,
+        type: 'interaction',
+        subtype: 'click',
+        target: { tag: 'button', id: 'go', text: 'Go', source: null },
+        // Agent-driven interactions carry the audit marker through ingest.
+        synthetic: true,
+      },
       { ...base, type: 'performance', metric: 'LCP', value: 1200, rating: 'good', detail: null },
     ];
     for (const event of events) {

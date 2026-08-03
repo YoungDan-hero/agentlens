@@ -35,9 +35,13 @@ export function describeTarget(element: Element): InteractionTarget {
 export function installInteractionCollector(sink: EventSink, context: EventContext): () => void {
   const lastInputAt = new WeakMap<EventTarget, number>();
 
+  // `!isTrusted` marks interactions synthesized by the action channel (or
+  // application code), giving the daemon an audit trail of agent activity.
   const onClick = (event: MouseEvent): void => {
     if (event.target instanceof Element) {
-      sink.send(buildInteractionEvent(context, 'click', describeTarget(event.target)));
+      sink.send(
+        buildInteractionEvent(context, 'click', describeTarget(event.target), !event.isTrusted),
+      );
     }
   };
 
@@ -53,12 +57,14 @@ export function installInteractionCollector(sink: EventSink, context: EventConte
       return;
     }
     lastInputAt.set(target, now);
-    sink.send(buildInteractionEvent(context, 'input', describeTarget(target)));
+    sink.send(buildInteractionEvent(context, 'input', describeTarget(target), !event.isTrusted));
   };
 
   const onSubmit = (event: Event): void => {
     if (event.target instanceof Element) {
-      sink.send(buildInteractionEvent(context, 'submit', describeTarget(event.target)));
+      sink.send(
+        buildInteractionEvent(context, 'submit', describeTarget(event.target), !event.isTrusted),
+      );
     }
   };
 

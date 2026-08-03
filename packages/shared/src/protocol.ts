@@ -104,6 +104,12 @@ export interface InteractionEvent extends BaseEvent {
   type: 'interaction';
   subtype: 'click' | 'input' | 'submit';
   target: InteractionTarget;
+  /**
+   * True when the interaction was synthesized by the AgentLens action
+   * channel rather than performed by a human (`isTrusted` was false).
+   * Doubles as the audit trail of everything an agent did to the page.
+   */
+  synthetic?: boolean;
 }
 
 /**
@@ -166,6 +172,97 @@ export interface SnapshotResponse {
   root: LayoutNode | null;
   /** True when the node budget was exhausted and subtrees were dropped. */
   truncated: boolean;
+}
+
+/** Kinds of page actions the daemon can ask the runtime to perform. */
+export type ActionType = 'click' | 'input' | 'select' | 'scroll' | 'navigate';
+
+/**
+ * Locates the element an action applies to. Exactly one of the locator
+ * fields is used, in priority order: `source` (stable across refactors) →
+ * `selector` → `text` (deepest element whose visible text contains it).
+ */
+export interface ActionTarget {
+  /** `data-agentlens-source` value, e.g. `"src/App.vue:42"`. */
+  source?: string;
+  /** CSS selector. */
+  selector?: string;
+  /** Visible text to match (trimmed, case-sensitive substring). */
+  text?: string;
+  /** Zero-based index when the locator matches multiple elements. */
+  nth?: number;
+}
+
+/** Daemon -> browser: asks the runtime to perform one page action. */
+export interface ActionRequest {
+  kind: 'action-request';
+  requestId: string;
+  action: ActionType;
+  /** Required for click / input / select; optional for scroll. */
+  target?: ActionTarget;
+  /** The value to type (input) or the option value/label to pick (select). */
+  value?: string;
+  /** Same-origin URL or path to navigate to. */
+  url?: string;
+  /** Viewport scroll coordinates when `scroll` has no target. */
+  x?: number;
+  y?: number;
+}
+
+/** Signals captured between dispatching an action and the page settling. */
+export interface ActionEffects {
+  errors: number;
+  failedRequests: number;
+  consoleErrors: number;
+}
+
+/** Browser -> daemon: outcome of one action request. */
+export interface ActionResult {
+  kind: 'action-result';
+  requestId: string;
+  sessionId: string;
+  ok: boolean;
+  /** Failure reason; null on success. */
+  error: string | null;
+  /** The element actually acted on; null on failure or element-less actions. */
+  target: InteractionTarget | null;
+  effects: ActionEffects;
+  /** Milliseconds until the page went quiet after the action. */
+  settledAfterMs: number;
+  /** True when the settle wait hit its ceiling instead of going quiet. */
+  settleTimedOut: boolean;
+}
+
+export function isActionRequest(value: unknown): value is ActionRequest {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Partial<ActionRequest>;
+  return (
+    candidate.kind === 'action-request' &&
+    typeof candidate.requestId === 'string' &&
+    typeof candidate.action === 'string'
+  );
+}
+
+export function isActionResult(value: unknown): value is ActionResult {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Partial<ActionResult>;
+  // Read untyped: the wire value may carry anything, including null.
+  const effects: unknown = (value as { effects?: unknown }).effects;
+  return (
+    candidate.kind === 'action-result' &&
+    typeof candidate.requestId === 'string' &&
+    typeof candidate.sessionId === 'string' &&
+    typeof candidate.ok === 'boolean' &&
+    typeof candidate.settledAfterMs === 'number' &&
+    typeof candidate.settleTimedOut === 'boolean' &&
+    (candidate.error === null || typeof candidate.error === 'string') &&
+    typeof effects === 'object' &&
+    effects !== null
+  );
 }
 
 export function isSnapshotRequest(value: unknown): value is SnapshotRequest {

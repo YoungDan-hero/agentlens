@@ -117,12 +117,15 @@ export function buildInteractionEvent(
   context: EventContext,
   subtype: InteractionEvent['subtype'],
   target: InteractionTarget,
+  synthetic = false,
 ): InteractionEvent {
   return {
     ...baseFields(context),
     type: 'interaction',
     subtype,
     target,
+    // Only stamped when true: the common (human) case stays lean on the wire.
+    ...(synthetic && { synthetic: true }),
   };
 }
 

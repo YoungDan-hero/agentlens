@@ -9,6 +9,7 @@ In-browser collector SDK for AgentLens. Captures runtime signals during developm
 - **Interactions** — clicks, debounced inputs and form submits, attributed to the source line that rendered the element
 - **Lifecycle** — page load, SPA route changes (History API), HMR updates and unload
 - **Layout snapshots** — answers daemon requests with a structured box-model tree of the page
+- **Action channel (opt-in)** — executes daemon-requested page actions (click, type, select, scroll, same-origin navigate) with synthetic DOM events compatible with React state tracking and Vue v-model; refuses to act while the user is interacting, and marks every synthetic interaction with `synthetic: true` for auditability
 
 Events are micro-batched over a single WebSocket with bounded buffering and exponential-backoff reconnection. Pending events are flushed on page hide so the last moments of a session are not lost.
 
@@ -28,6 +29,7 @@ if (process.env.NODE_ENV === 'development') {
       // endpoint: 'ws://localhost:8631/agentlens', // match AGENTLENS_PORT if changed
       // captureBodies: false, // opt in to request/response bodies (redacted)
       // redactKeys: ['idCard'], // project-specific sensitive keys
+      // allowActions: false, // opt in to agent-driven page actions (perform_action)
     });
   });
 }

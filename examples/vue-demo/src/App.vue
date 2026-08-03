@@ -2,6 +2,8 @@
 import { ref } from 'vue';
 
 const log = ref<string[]>([]);
+// Exercised by the action-channel E2E: perform_action must drive v-model.
+const visitorName = ref('');
 
 function record(message: string): void {
   const time = new Intl.DateTimeFormat('en-GB', {
@@ -93,6 +95,14 @@ function sendBeacon(): void {
     <button id="btn-beacon" class="action" @click="sendBeacon">
       7. Send a beacon (fire-and-forget)
     </button>
+
+    <label class="visitor">
+      Visitor name
+      <input id="visitor-name" v-model="visitorName" type="text" placeholder="Type your name" />
+    </label>
+    <p id="visitor-greeting">
+      {{ visitorName === '' ? 'Hello, stranger.' : `Hello, ${visitorName}!` }}
+    </p>
 
     <section id="signal-log" class="log" aria-live="polite">
       {{ log.length === 0 ? 'No signals emitted yet — click a button above.' : log.join('\n') }}

@@ -1,6 +1,7 @@
-import { DEFAULT_WS_PORT, isSnapshotRequest, WS_PATH } from '@agentlensjs/shared';
-import type { SnapshotResponse } from '@agentlensjs/shared';
+import { DEFAULT_WS_PORT, isActionRequest, isSnapshotRequest, WS_PATH } from '@agentlensjs/shared';
+import type { ActionResult, SnapshotResponse } from '@agentlensjs/shared';
 
+import { createActionExecutor } from './actions';
 import { installConsoleCollector } from './collectors/console';
 import { installErrorCollector } from './collectors/errors';
 import { installInteractionCollector } from './collectors/interactions';
@@ -30,6 +31,16 @@ export interface InitOptions {
    * @example ['idCard', 'mobile']
    */
   redactKeys?: string[];
+  /**
+   * Allow the daemon's `perform_action` tool to drive this page (click,
+   * type, select, scroll, same-origin navigation). Off by default: the
+   * action channel turns the daemon from an observer into an actuator, so
+   * it must be an explicit opt-in. Actions refuse to run while the user is
+   * actively interacting, and every synthetic interaction is captured with
+   * a `synthetic` marker as an audit trail.
+   * @default false
+   */
+  allowActions?: boolean;
 }
 
 export interface AgentLensClient {
@@ -74,37 +85,59 @@ export function init(options: InitOptions = {}): AgentLensClient {
     },
   };
 
+  const executor = createActionExecutor({ enabled: options.allowActions ?? false });
+
   const transport: Transport = new Transport({
     endpoint,
     onMessage: (message) => {
-      if (!isSnapshotRequest(message)) {
+      if (isSnapshotRequest(message)) {
+        const { root, truncated } = captureLayoutSnapshot();
+        const response: SnapshotResponse = {
+          kind: 'snapshot-response',
+          requestId: message.requestId,
+          sessionId: context.sessionId,
+          url: context.url,
+          capturedAt: Date.now(),
+          root,
+          truncated,
+        };
+        transport.sendRaw(response);
         return;
       }
-      const { root, truncated } = captureLayoutSnapshot();
-      const response: SnapshotResponse = {
-        kind: 'snapshot-response',
-        requestId: message.requestId,
-        sessionId: context.sessionId,
-        url: context.url,
-        capturedAt: Date.now(),
-        root,
-        truncated,
-      };
-      transport.sendRaw(response);
+      if (isActionRequest(message)) {
+        void executor.handle(message).then((outcome) => {
+          const result: ActionResult = {
+            kind: 'action-result',
+            requestId: message.requestId,
+            sessionId: context.sessionId,
+            ...outcome,
+          };
+          transport.sendRaw(result);
+        });
+      }
     },
   });
+  // Tee: the executor watches the local event stream to know when the page
+  // has settled after an action and which effects the action triggered.
+  const sink = {
+    send: (event: Parameters<Transport['send']>[0]): void => {
+      executor.noteLocalEvent(event);
+      transport.send(event);
+    },
+  };
   const teardowns = [
-    installErrorCollector(transport, context),
-    installConsoleCollector(transport, context),
-    installNetworkCollector(transport, context, {
+    installErrorCollector(sink, context),
+    installConsoleCollector(sink, context),
+    installNetworkCollector(sink, context, {
       captureBodies: options.captureBodies ?? false,
       // The transport reconnects with `new WebSocket`; the collector must
       // not observe the runtime's own daemon connection.
       ignoreWebSocketUrls: [endpoint],
     }),
-    installInteractionCollector(transport, context),
-    installNavigationCollector(transport, context),
-    installPerformanceCollector(transport, context),
+    installInteractionCollector(sink, context),
+    installNavigationCollector(sink, context),
+    installPerformanceCollector(sink, context),
+    executor.dispose,
   ];
 
   // Flush synchronously on pagehide: the batch window would otherwise drop

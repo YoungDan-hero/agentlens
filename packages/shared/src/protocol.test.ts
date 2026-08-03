@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import type { SnapshotResponse } from './protocol';
-import { isSnapshotRequest, isSnapshotResponse } from './protocol';
+import type { ActionResult, SnapshotResponse } from './protocol';
+import { isActionRequest, isActionResult, isSnapshotRequest, isSnapshotResponse } from './protocol';
 
 describe('isSnapshotRequest', () => {
   it('accepts a well-formed request', () => {
@@ -13,6 +13,58 @@ describe('isSnapshotRequest', () => {
     expect(isSnapshotRequest({ kind: 'snapshot-request' })).toBe(false);
     expect(isSnapshotRequest(null)).toBe(false);
     expect(isSnapshotRequest('snapshot-request')).toBe(false);
+  });
+});
+
+describe('isActionRequest', () => {
+  it('accepts a well-formed request', () => {
+    expect(
+      isActionRequest({
+        kind: 'action-request',
+        requestId: 'r1',
+        action: 'click',
+        target: { selector: '#go' },
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects wrong kind, missing fields and non-objects', () => {
+    expect(isActionRequest({ kind: 'action-result', requestId: 'r1', action: 'click' })).toBe(
+      false,
+    );
+    expect(isActionRequest({ kind: 'action-request', action: 'click' })).toBe(false);
+    expect(isActionRequest({ kind: 'action-request', requestId: 'r1' })).toBe(false);
+    expect(isActionRequest(null)).toBe(false);
+  });
+});
+
+describe('isActionResult', () => {
+  const validResult: ActionResult = {
+    kind: 'action-result',
+    requestId: 'r1',
+    sessionId: 'session-1',
+    ok: true,
+    error: null,
+    target: { tag: 'button', id: 'go', text: 'Go', source: 'src/App.vue:3' },
+    effects: { errors: 0, failedRequests: 0, consoleErrors: 0 },
+    settledAfterMs: 120,
+    settleTimedOut: false,
+  };
+
+  it('accepts success and failure shapes', () => {
+    expect(isActionResult(validResult)).toBe(true);
+    expect(
+      isActionResult({ ...validResult, ok: false, error: 'no element matches', target: null }),
+    ).toBe(true);
+  });
+
+  it('rejects missing or mistyped fields', () => {
+    const { effects: _effects, ...withoutEffects } = validResult;
+    expect(isActionResult(withoutEffects)).toBe(false);
+    expect(isActionResult({ ...validResult, error: 42 })).toBe(false);
+    expect(isActionResult({ ...validResult, settledAfterMs: 'fast' })).toBe(false);
+    expect(isActionResult({ ...validResult, kind: 'action-request' })).toBe(false);
+    expect(isActionResult(null)).toBe(false);
   });
 });
 

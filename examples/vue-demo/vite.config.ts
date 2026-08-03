@@ -27,9 +27,14 @@ const daemonPort = process.env.AGENTLENS_PORT ? Number(process.env.AGENTLENS_POR
 export default defineConfig({
   plugins: [
     vue(),
-    // captureBodies showcases opt-in body capture with redaction; real
-    // projects should only enable it when body contents matter.
-    agentlens({ captureBodies: true, ...(daemonPort === undefined ? {} : { port: daemonPort }) }),
+    // captureBodies showcases opt-in body capture with redaction, and
+    // allowActions the agent-driven action channel; real projects should
+    // only enable either when they need it.
+    agentlens({
+      captureBodies: true,
+      allowActions: true,
+      ...(daemonPort === undefined ? {} : { port: daemonPort }),
+    }),
     fakeApi(),
   ],
 });

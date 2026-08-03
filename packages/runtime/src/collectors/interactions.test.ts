@@ -46,6 +46,9 @@ describe('interaction collector', () => {
       expect(event.target.tag).toBe('span');
       expect(event.target.text).toBe('Save changes');
       expect(event.target.source).toBe('src/App.tsx:12');
+      // Dispatched events are untrusted, so the audit marker must be set —
+      // exactly how agent-driven actions are distinguished from humans.
+      expect(event.synthetic).toBe(true);
     }
   });
 

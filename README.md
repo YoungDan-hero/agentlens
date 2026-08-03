@@ -38,18 +38,26 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 - **Session isolation** — every page load / tab is a separate session; queries scope to the most recently active one by default
 - **Source attribution** — the Vite plugin stamps Vue SFC template elements and JSX host elements with `data-agentlens-source="file:line"`, so DOM nodes, clicks and layout boxes all trace back to code
 
-**Eight MCP tools** for the agent:
+**Browser action channel** (opt-in):
 
-| Tool                       | What it answers                                                      |
-| -------------------------- | -------------------------------------------------------------------- |
-| `get_page_health`          | "Is the page healthy right now?" — errors, failed requests, activity |
-| `get_error_context`        | "Why did this error happen?" — one-call root-cause bundle            |
-| `get_recent_events`        | "Show me the errors / logs / requests" — filterable drill-down       |
-| `get_interaction_timeline` | "What did the user do to cause this?" — cause-and-effect grouping    |
-| `get_layout_snapshot`      | "What does the page look like?" — structured box tree, no screenshot |
-| `get_performance`          | "Why is the page slow?" — Web Vitals with ratings, long-task load    |
-| `verify_fix`               | "Did my fix work?" — waits for HMR, watches whether the error recurs |
-| `list_sessions`            | "Which tabs / reloads are connected?" — session management           |
+- **Agent-driven testing** — with `allowActions: true`, the agent can click, type, pick select options, scroll and navigate (same origin only) inside your real dev session — no separate browser, no cold start, with every AgentLens signal available for assertions
+- **Human input wins** — actions are refused while you are actively using the page; the agent simply retries later
+- **Audit trail** — every synthetic interaction is captured with a `synthetic: true` marker, and touched elements flash a highlight outline
+
+**Ten MCP tools** for the agent:
+
+| Tool                       | What it answers                                                             |
+| -------------------------- | --------------------------------------------------------------------------- |
+| `get_page_health`          | "Is the page healthy right now?" — errors, failed requests, activity        |
+| `get_error_context`        | "Why did this error happen?" — one-call root-cause bundle                   |
+| `get_recent_events`        | "Show me the errors / logs / requests" — filterable drill-down              |
+| `get_interaction_timeline` | "What did the user do to cause this?" — cause-and-effect grouping           |
+| `get_layout_snapshot`      | "What does the page look like?" — structured box tree, no screenshot        |
+| `get_performance`          | "Why is the page slow?" — Web Vitals with ratings, long-task load           |
+| `perform_action`           | "Click that button / fill that form for me" — drives the live page (opt-in) |
+| `wait_for_idle`            | "Has the app finished reacting?" — blocks until the event stream settles    |
+| `verify_fix`               | "Did my fix work?" — waits for HMR, watches whether the error recurs        |
+| `list_sessions`            | "Which tabs / reloads are connected?" — session management                  |
 
 ## Use cases
 
@@ -59,6 +67,7 @@ AI coding agents can write frontend code, but they cannot see what happens in th
 - **Layout and styling issues** — `get_layout_snapshot` gives the agent a structured view of every box (position, size, visibility, overflow, text) with the source line that rendered it, so "the sidebar overflows" becomes an addressable fact instead of a guess.
 - **Performance regressions** — `get_performance` reports the current Web Vitals with their web.dev ratings and the long-task pressure, so "the page feels slow" turns into "INP is 620 ms (poor) and there are 14 long tasks totalling 2.1 s".
 - **Closing the fix loop** — after editing, the agent calls `verify_fix` with the error's fingerprint; the daemon waits for the HMR update to reach the browser and reports whether the error recurred.
+- **In-session automated testing** — with actions enabled, the agent reproduces the bug itself: `perform_action` clicks the button that crashed (located by `data-agentlens-source`, stable across refactors), `wait_for_idle` lets the app settle, and the action result reports the errors and failed requests it triggered — a full regression check without leaving your dev session.
 
 ## Getting started
 
@@ -99,6 +108,7 @@ agentlens({
   enabled: true, // force-disable injection when needed
   captureBodies: false, // opt in to capture request/response bodies (redacted)
   redactKeys: ['idCard', 'mobile'], // project-specific sensitive keys, on top of the built-ins
+  allowActions: false, // opt in to let the agent drive the page via perform_action
 });
 ```
 
@@ -164,12 +174,13 @@ init({
   endpoint: 'ws://localhost:8631/agentlens', // match AGENTLENS_PORT if you changed it
   captureBodies: false, // opt in to request/response bodies (redacted)
   redactKeys: ['idCard', 'mobile'], // project-specific sensitive keys
+  allowActions: false, // opt in to let the agent drive the page via perform_action
 });
 ```
 
 One caveat inherent to this pattern: collectors only exist once the dynamically imported chunk has loaded, so signals fired synchronously during application startup are not captured. This exact integration is exercised by an automated smoke test in [`examples/webpack-demo`](./examples/webpack-demo).
 
-Everything above works with manual setup — errors, console, network, performance, interactions, layout snapshots and all eight MCP tools — with two degradations:
+Everything above works with manual setup — errors, console, network, performance, interactions, layout snapshots, the action channel and all ten MCP tools — with two degradations:
 
 - **Source attribution** — `data-agentlens-source` is stamped by the Vite plugin's template/JSX transform, so without it, interactions and layout boxes describe elements by tag / id / class instead of `file:line`.
 - **`verify_fix`** — the daemon accepts either an HMR signal or a full page reload as proof that new code reached the browser. Reloads work out of the box; to get the faster HMR path, wire your bundler's hot API to `reportHmrUpdate`:
@@ -218,7 +229,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow.
 - [x] M3 — interaction timeline (cause-and-effect grouping of user actions and their effects)
 - [x] M4 — first-class Vue support: SFC template source attribution, Vue demo in the E2E matrix
 - [x] M5a — one-call error root-cause bundle (`get_error_context`)
-- [ ] M5b — browser action channel: agent-driven in-session automated testing (opt-in)
+- [x] M5b — browser action channel: agent-driven in-session automated testing (opt-in)
 
 ## Privacy & data safety
 
@@ -231,6 +242,7 @@ AgentLens is a dev-time tool designed so that sensitive data cannot leave your m
 - **Bodies are opt-in and redacted** — request/response bodies ship only with `captureBodies: true`, and even then sensitive fields (`password`, `token`, `secret`, `authorization`, ...) are replaced with `[REDACTED]` inside the browser, before anything leaves the page. Add project-specific keys (e.g. `idCard`) with the `redactKeys` option. Bodies are size-capped (4 KB).
 - **URLs are redacted by default** — sensitive query parameter values (`?token=...`, `?apiKey=...`) are stripped on every network event.
 - **Form values are never captured** — interaction events record the element, not what was typed into it.
+- **The action channel is off by default** — `perform_action` only works when the app opts in with `allowActions: true`. Even then: actions are refused while you are actively interacting (human input always wins), navigation is confined to the app's own origin, and every synthetic interaction lands in the store with a `synthetic: true` audit marker.
 
 Found a vulnerability? Please report it privately — see [SECURITY.md](./SECURITY.md).
 
