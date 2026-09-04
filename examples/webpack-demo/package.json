@@ -11,8 +11,8 @@
     "@agentlensjs/runtime": "workspace:*",
     "html-webpack-plugin": "^5.6.0",
     "playwright-core": "^1.62.1",
-    "webpack": "^5.95.0",
-    "webpack-cli": "^7.2.2",
+    "webpack": "^5.110.2",
+    "webpack-cli": "^7.2.3",
     "webpack-dev-server": "^6.0.0"
   }
 }
