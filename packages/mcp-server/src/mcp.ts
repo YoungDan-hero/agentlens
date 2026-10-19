@@ -604,9 +604,11 @@ export function createMcpServer(
         }
 
         const occurrencesBefore =
-          script.fingerprint !== null
-            ? (store.getErrorByFingerprint(script.fingerprint)?.occurrences ?? 0)
-            : 0;
+          script.fingerprint !== null ? store.countErrorOccurrences(script.fingerprint) : 0;
+        const latestErrorBefore =
+          script.fingerprint !== null ? store.getErrorByFingerprint(script.fingerprint) : undefined;
+        const errorIdBefore = latestErrorBefore?.id;
+        const errorOccurrencesBefore = latestErrorBefore?.occurrences ?? 0;
         const timeoutMs = Math.min(steps.length * 10_000 + 5000, 90_000);
         try {
           const {
@@ -621,15 +623,22 @@ export function createMcpServer(
           // A grace period longer than the batch window closes that race.
           await new Promise((resolve) => setTimeout(resolve, 250));
           const occurrencesAfter =
+            script.fingerprint !== null ? store.countErrorOccurrences(script.fingerprint) : 0;
+          const latestError =
             script.fingerprint !== null
-              ? (store.getErrorByFingerprint(script.fingerprint)?.occurrences ?? 0)
-              : 0;
+              ? store.getErrorByFingerprint(script.fingerprint)
+              : undefined;
           return jsonResult({
             ...result,
             fingerprint: script.fingerprint,
             occurrencesBefore,
             occurrencesAfter,
-            errorRecurred: occurrencesAfter > occurrencesBefore,
+            // A reload may evict the old session and lower the retained count.
+            errorRecurred:
+              occurrencesAfter > occurrencesBefore ||
+              (latestError !== undefined &&
+                (latestError.id !== errorIdBefore ||
+                  latestError.occurrences > errorOccurrencesBefore)),
           });
         } catch (error) {
           return jsonResult({ error: error instanceof Error ? error.message : String(error) });

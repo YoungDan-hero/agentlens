@@ -401,36 +401,94 @@ describe('createMcpServer', () => {
     expect(result.requestId).toBeUndefined();
   });
 
-  it('replay_error_path dry-runs a script, then executes with values and reports recurrence', async () => {
-    const store = new EventStore();
-    const interaction: InteractionEvent = {
-      id: 'i-replay',
-      type: 'interaction',
-      subtype: 'input',
-      timestamp: Date.now() - 500,
-      sessionId: 'session-1',
-      url: 'http://localhost:5173/',
-      target: { tag: 'input', id: 'email', text: null, source: null },
-    };
-    store.add(interaction);
-    const stored = store.add(
-      makeError({ stack: 'Error: boom\n    at pay (http://localhost:5173/src/pay.ts:1:1)' }),
-    );
+  it.each([
+    { replaySessionId: 'session-1', capacity: 5000 },
+    { replaySessionId: 'session-2', capacity: 5000 },
+    { replaySessionId: 'session-2', capacity: 2 },
+  ])(
+    'replay detects recurrence with $replaySessionId and capacity $capacity',
+    async ({ replaySessionId, capacity }) => {
+      const store = new EventStore(capacity);
+      const interaction: InteractionEvent = {
+        id: 'i-replay',
+        type: 'interaction',
+        subtype: 'input',
+        timestamp: Date.now() - 500,
+        sessionId: 'session-1',
+        url: 'http://localhost:5173/',
+        target: { tag: 'input', id: 'email', text: null, source: null },
+      };
+      store.add(interaction);
+      const stored = store.add(
+        makeError({
+          stack: 'Error: boom\n    at pay (http://localhost:5173/src/pay.ts?t=100:1:1)',
+        }),
+      );
 
-    let executed: unknown;
+      let executed: unknown;
+      const client = await connect(store, {
+        requestActionSequence: (steps) => {
+          executed = steps;
+          // The replayed path re-triggers the error: the store folds a repeat.
+          store.add(
+            makeError({
+              sessionId: replaySessionId,
+              stack: 'Error: boom\n    at pay (http://localhost:5173/src/pay.ts?t=200:1:1)',
+            }),
+          );
+          if (capacity === 2) {
+            store.add(makePerformance());
+          }
+          return Promise.resolve({
+            kind: 'action-sequence-result' as const,
+            requestId: 'r1',
+            sessionId: replaySessionId,
+            ok: true,
+            stoppedAt: null,
+            stopReason: null,
+            stepResults: [],
+            totalEffects: { errors: 1, failedRequests: 0, consoleErrors: 0 },
+            finalUrl: 'http://localhost:5173/',
+          });
+        },
+      });
+
+      const dry = await callJson(client, 'replay_error_path', { errorId: stored.id });
+      expect(dry.executable).toBe(true);
+      expect(dry.needsValue).toEqual([0]);
+      expect(String(dry.hint)).toContain('supply values');
+      expect(executed).toBeUndefined();
+
+      const run = await callJson(client, 'replay_error_path', {
+        errorId: stored.id,
+        dryRun: false,
+        values: { '0': 'ada@example.com' },
+      });
+      expect(executed).toEqual([
+        { action: 'input', target: { selector: '[id="email"]' }, value: 'ada@example.com' },
+      ]);
+      expect(run.errorRecurred).toBe(true);
+      expect(run.occurrencesBefore).toBe(1);
+      expect(run.occurrencesAfter).toBe(capacity === 2 ? 1 : 2);
+    },
+  );
+
+  it('replay detects a folded recurrence when another session is evicted', async () => {
+    const store = new EventStore(3);
+    const now = Date.now();
+    for (let index = 0; index < 10; index += 1) {
+      store.add(makeError({ sessionId: 'session-a', timestamp: now - 1000 }));
+    }
+    store.add({ ...makeInteraction(), sessionId: 'session-b', timestamp: now - 500 });
+    const stored = store.add(makeError({ sessionId: 'session-b', timestamp: now - 100 }));
     const client = await connect(store, {
-      requestActionSequence: (steps) => {
-        executed = steps;
-        // The replayed path re-triggers the error: the store folds a repeat.
-        store.add(
-          makeError({
-            stack: 'Error: boom\n    at pay (http://localhost:5173/src/pay.ts:1:1)',
-          }),
-        );
+      requestActionSequence: () => {
+        store.add(makeError({ sessionId: 'session-b' }));
+        store.add(makePerformance({ sessionId: 'session-b' }));
         return Promise.resolve({
           kind: 'action-sequence-result' as const,
           requestId: 'r1',
-          sessionId: 'session-1',
+          sessionId: 'session-b',
           ok: true,
           stoppedAt: null,
           stopReason: null,
@@ -441,23 +499,16 @@ describe('createMcpServer', () => {
       },
     });
 
-    const dry = await callJson(client, 'replay_error_path', { errorId: stored.id });
-    expect(dry.executable).toBe(true);
-    expect(dry.needsValue).toEqual([0]);
-    expect(String(dry.hint)).toContain('supply values');
-    expect(executed).toBeUndefined();
-
-    const run = await callJson(client, 'replay_error_path', {
+    const result = await callJson(client, 'replay_error_path', {
       errorId: stored.id,
+      sessionId: 'session-b',
       dryRun: false,
-      values: { '0': 'ada@example.com' },
     });
-    expect(executed).toEqual([
-      { action: 'input', target: { selector: '[id="email"]' }, value: 'ada@example.com' },
-    ]);
-    expect(run.errorRecurred).toBe(true);
-    expect(run.occurrencesBefore).toBe(1);
-    expect(run.occurrencesAfter).toBe(2);
+
+    expect(store.getErrorById(stored.id)?.occurrences).toBe(2);
+    expect(result.occurrencesBefore).toBe(11);
+    expect(result.occurrencesAfter).toBe(2);
+    expect(result.errorRecurred).toBe(true);
   });
 
   it('replay_error_path refuses to execute with missing input values', async () => {

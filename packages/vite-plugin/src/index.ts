@@ -68,6 +68,7 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
   const initOptions = JSON.stringify({ endpoint, captureBodies, redactKeys, allowActions });
 
   let root = process.cwd();
+  let base = '/';
 
   return {
     name: 'agentlens',
@@ -78,6 +79,7 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
 
     configResolved(config) {
       root = config.root;
+      base = config.base;
     },
 
     transform(code, id) {
@@ -157,7 +159,7 @@ export function agentlens(options: AgentLensPluginOptions = {}): Plugin {
       return [
         {
           tag: 'script',
-          attrs: { type: 'module', src: `/@id/${VIRTUAL_MODULE_ID}` },
+          attrs: { type: 'module', src: `${base}@id/${VIRTUAL_MODULE_ID}` },
           injectTo: 'head' as const,
         },
       ];

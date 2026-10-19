@@ -37,7 +37,7 @@ export interface ErrorEvent extends BaseEvent {
   frames: StackFrame[];
   /**
    * How many times this identical error occurred. The browser always sends 1;
-   * the daemon folds repeats (same fingerprint) into one record and counts.
+   * the daemon folds repeats within each session into one record and counts.
    */
   occurrences: number;
   /**

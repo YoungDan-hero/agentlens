@@ -454,6 +454,59 @@ describe('ws ingest server security boundary', () => {
     await expect(connectWithOrigin('https://preview.example.com')).resolves.toBe('open');
   });
 
+  it.each(['oversized payload', 'disconnect'])(
+    "rejects the broken connection's requests and keeps other sessions usable after %s",
+    async (failure) => {
+      server = startWsIngestServer(new EventStore(), port);
+      const broken = await connectRuntime(port, 'broken');
+      sockets.push(broken);
+      broken.removeAllListeners('message');
+      const healthy = await connectRuntime(port, 'healthy');
+      sockets.push(healthy);
+      healthy.removeAllListeners('message');
+      healthy.on('message', (raw) => {
+        const message: unknown = JSON.parse((raw as Buffer).toString('utf8'));
+        if (isSnapshotRequest(message)) {
+          setTimeout(() => {
+            healthy.send(JSON.stringify(makeSnapshotResponse(message.requestId, 'healthy')));
+          }, 50);
+        }
+      });
+
+      const pending = Promise.allSettled([
+        server.requestSnapshot('broken', 500),
+        server.requestAction({ action: 'click' }, 'broken', 500),
+        server.requestActionSequence([{ action: 'click' }], 'broken', 500),
+        server.requestSourceQuery('src/App.vue', 'broken', 500),
+      ]);
+      const unaffected = server.requestSnapshot('healthy');
+      const disconnected = new Promise<void>((resolve) => {
+        broken.once('close', () => {
+          resolve();
+        });
+      });
+      if (failure === 'oversized payload') {
+        broken.send(Buffer.alloc(5 * 1024 * 1024 + 1));
+      } else {
+        broken.terminate();
+      }
+
+      await disconnected;
+      for (const result of await pending) {
+        expect(result.status).toBe('rejected');
+        if (result.status === 'rejected') {
+          expect(result.reason).toBeInstanceOf(Error);
+          expect((result.reason as Error).message).toMatch(/browser connection/i);
+        }
+      }
+      await expect(unaffected).resolves.toMatchObject({ sessionId: 'healthy' });
+      await expect(server.requestSnapshot('healthy')).resolves.toMatchObject({
+        sessionId: 'healthy',
+      });
+      expect(server.sessionFocus().some((session) => session.sessionId === 'broken')).toBe(false);
+    },
+  );
+
   it('logs (once) and drops batches with a mismatched protocol version', async () => {
     const store = new EventStore();
     server = startWsIngestServer(store, port);

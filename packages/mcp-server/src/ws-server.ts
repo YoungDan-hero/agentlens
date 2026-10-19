@@ -204,6 +204,7 @@ export function startWsIngestServer(
   const rejectedOrigins = new Set<string>();
 
   interface Pending<T> {
+    socket: WebSocket;
     resolve: (value: T) => void;
     /** Kept so close() can settle in-flight requests instead of leaving them hanging. */
     reject: (error: Error) => void;
@@ -216,13 +217,20 @@ export function startWsIngestServer(
   const pendingSourceQueries = new Map<string, Pending<SourceQueryResponse>>();
   const pendingSequences = new Map<string, Pending<ActionSequenceResult>>();
 
-  /** Rejects and clears every in-flight request of one kind. */
-  function drainPending<T>(pending: Map<string, Pending<T>>): void {
-    for (const entry of pending.values()) {
+  /** Rejects requests for one connection, or every request during shutdown. */
+  function drainPending<T>(
+    pending: Map<string, Pending<T>>,
+    error: Error = new Error('The AgentLens daemon is shutting down.'),
+    socket?: WebSocket,
+  ): void {
+    for (const [requestId, entry] of pending) {
+      if (socket !== undefined && entry.socket !== socket) {
+        continue;
+      }
       clearTimeout(entry.timer);
-      entry.reject(new Error('The AgentLens daemon is shutting down.'));
+      pending.delete(requestId);
+      entry.reject(error);
     }
-    pending.clear();
   }
 
   let wss: WebSocketServer;
@@ -242,8 +250,22 @@ export function startWsIngestServer(
       warnedMalformedEvents: false,
     });
 
-    socket.on('close', () => {
+    const disconnect = (error: Error): void => {
       connections.delete(socket);
+      drainPending(pendingSnapshots, error, socket);
+      drainPending(pendingActions, error, socket);
+      drainPending(pendingSourceQueries, error, socket);
+      drainPending(pendingSequences, error, socket);
+    };
+
+    socket.on('close', () => {
+      disconnect(new Error('The browser connection closed before answering the request.'));
+    });
+
+    socket.on('error', (error) => {
+      console.error('[agentlens] browser connection error:', error);
+      disconnect(new Error(`The browser connection failed: ${error.message}`));
+      socket.terminate();
     });
 
     socket.on('message', (raw) => {
@@ -487,7 +509,7 @@ export function startWsIngestServer(
           pendingSnapshots.delete(request.requestId);
           reject(new Error('The browser did not answer the snapshot request in time.'));
         }, timeoutMs);
-        pendingSnapshots.set(request.requestId, { resolve, reject, timer });
+        pendingSnapshots.set(request.requestId, { socket, resolve, reject, timer });
         socket.send(JSON.stringify(request));
       });
     },
@@ -516,7 +538,7 @@ export function startWsIngestServer(
             ),
           );
         }, timeoutMs);
-        pendingActions.set(request.requestId, { resolve, reject, timer });
+        pendingActions.set(request.requestId, { socket, resolve, reject, timer });
         socket.send(JSON.stringify(request));
       });
     },
@@ -553,7 +575,7 @@ export function startWsIngestServer(
             ),
           );
         }, timeoutMs);
-        pendingSequences.set(request.requestId, { resolve, reject, timer });
+        pendingSequences.set(request.requestId, { socket, resolve, reject, timer });
         socket.send(JSON.stringify(request));
       });
     },
@@ -578,7 +600,7 @@ export function startWsIngestServer(
           pendingSourceQueries.delete(request.requestId);
           reject(new Error('The browser did not answer the source query in time.'));
         }, timeoutMs);
-        pendingSourceQueries.set(request.requestId, { resolve, reject, timer });
+        pendingSourceQueries.set(request.requestId, { socket, resolve, reject, timer });
         socket.send(JSON.stringify(request));
       });
     },

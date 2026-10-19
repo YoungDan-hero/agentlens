@@ -228,18 +228,86 @@ describe('EventStore', () => {
     expect(first.timestamp).toBe(firstSeenAt + 50);
   });
 
-  it('reassigns a folded error to the session of its latest occurrence', () => {
+  it('keeps identical errors and their occurrence counts in separate sessions', () => {
     const store = new EventStore();
     const stack = 'Error: boom\n    at render (App.tsx:1:1)';
     const now = Date.now();
-    store.add(makeError({ stack, sessionId: 'before-reload', timestamp: now - 1000 }));
-    store.add(makeError({ stack, sessionId: 'after-reload', timestamp: now }));
+    const before = store.add(
+      makeError({ stack, sessionId: 'before-reload', timestamp: now - 1000 }),
+    );
+    const after = store.add(makeError({ stack, sessionId: 'after-reload', timestamp: now }));
 
     // A reload must not hide a still-recurring error from the new session.
     const summary = store.summarize(60_000);
     expect(summary.sessionId).toBe('after-reload');
     expect(summary.errorCount).toBe(1);
-    expect(summary.errorOccurrences).toBe(2);
+    expect(summary.errorOccurrences).toBe(1);
+    expect(store.summarize(60_000, 'before-reload').errorCount).toBe(1);
+    expect(store.summarize(60_000, 'before-reload').errorOccurrences).toBe(1);
+    expect(store.getErrorById(before.id)).toBe(before);
+    expect(store.getErrorById(after.id)).toBe(after);
+    expect(before.sessionId).toBe('before-reload');
+    expect(store.size).toBe(2);
+    if (before.type === 'error') {
+      expect(store.getErrorByFingerprint(before.fingerprint ?? '')).toBe(after);
+      expect(store.countErrorOccurrences(before.fingerprint ?? '')).toBe(2);
+    }
+  });
+
+  it('folds HMR cache changes while keeping distinct module queries separate', () => {
+    const store = new EventStore();
+    const first = store.add(
+      makeError({
+        stack:
+          'Error: boom\n    at render (http://localhost:5173/src/App.vue?vue&type=script&t=100:10:5)',
+      }),
+    );
+    const second = store.add(
+      makeError({
+        stack:
+          'Error: boom\n    at render (http://localhost:5173/src/App.vue?t=200&vue&type=script&v=abc:10:5)',
+      }),
+    );
+    store.add(
+      makeError({
+        stack:
+          'Error: boom\n    at render (http://localhost:5173/src/App.vue?vue&type=template&t=200:10:5)',
+      }),
+    );
+
+    expect(second).toBe(first);
+    expect(first.type === 'error' && first.occurrences).toBe(2);
+    expect(first.type === 'error' && first.stack).toContain('t=200');
+    expect(store.size).toBe(2);
+  });
+
+  it('keeps stackless errors from different projects distinct', () => {
+    const store = new EventStore();
+    const first = store.add(makeError({ url: 'http://localhost:5173/' }));
+    const second = store.add(makeError({ url: 'http://localhost:4000/' }));
+    expect(store.size).toBe(2);
+    expect(first.type === 'error' && second.type === 'error' && first.fingerprint).not.toBe(
+      second.type === 'error' && second.fingerprint,
+    );
+  });
+
+  it('keeps the remaining session record when the newest matching error is evicted', () => {
+    const store = new EventStore(2);
+    const first = store.add(makeError({ sessionId: 'tab-a' }));
+    const second = store.add(makeError({ sessionId: 'tab-b' }));
+    store.add(makeError({ sessionId: 'tab-a' }));
+    store.add(makeNetwork(200));
+
+    expect(store.getErrorById(second.id)).toBeUndefined();
+    expect(store.getErrorById(first.id)).toBe(first);
+    expect(first.type === 'error' && store.getErrorByFingerprint(first.fingerprint ?? '')).toBe(
+      first,
+    );
+    expect(store.summarize(60_000, 'tab-a').errorOccurrences).toBe(2);
+    expect(store.summarize(60_000, 'tab-b').errorCount).toBe(0);
+    if (first.type === 'error') {
+      expect(store.countErrorOccurrences(first.fingerprint ?? '')).toBe(2);
+    }
   });
 
   it('surfaces a recurring folded error at the newest query position', () => {

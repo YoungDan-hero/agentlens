@@ -136,10 +136,17 @@ describe('redactBodyText', () => {
     expect(result).not.toContain('hunter2');
   });
 
-  it('passes through non-structured text and invalid json', () => {
+  it('passes through non-structured text', () => {
     expect(redactBodyText('plain text payload')).toBe('plain text payload');
-    expect(redactBodyText('{not json')).toBe('{not json');
   });
+
+  it.each(['{not json', '{"token":"secret-token","data":"', '[{"password":"hunter2"},'])(
+    'omits invalid or incomplete JSON instead of leaking it: %s',
+    (body) => {
+      expect(redactBodyText(body)).toBe('[body omitted: invalid JSON]');
+      expect(sanitizeBody(body)).toBe('[body omitted: invalid JSON]');
+    },
+  );
 });
 
 describe('sanitizeBody', () => {
