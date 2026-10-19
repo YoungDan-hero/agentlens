@@ -105,7 +105,7 @@ function looksUrlEncoded(text: string): boolean {
 /**
  * Redacts sensitive fields inside a body. JSON bodies are parsed and walked
  * (nested objects and arrays included); form-urlencoded bodies are treated
- * like a query string. Anything else passes through unchanged.
+ * like a query string. Invalid JSON is omitted; other text passes through.
  */
 export function redactBodyText(text: string): string {
   const trimmed = text.trim();
@@ -113,7 +113,7 @@ export function redactBodyText(text: string): string {
     try {
       return JSON.stringify(redactValue(JSON.parse(trimmed), 0));
     } catch {
-      return text;
+      return '[body omitted: invalid JSON]';
     }
   }
   if (looksUrlEncoded(trimmed)) {

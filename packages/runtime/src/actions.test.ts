@@ -6,7 +6,7 @@ import type {
   ErrorEvent,
   NetworkEvent,
 } from '@agentlensjs/shared';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ActionExecutor } from './actions';
 import { createActionExecutor } from './actions';
@@ -71,6 +71,7 @@ afterEach(() => {
   executor?.dispose();
   executor = null;
   document.body.innerHTML = '';
+  vi.useRealTimers();
 });
 
 describe('safety gates', () => {
@@ -205,6 +206,45 @@ describe('target resolution', () => {
     );
     expect(result.ok).toBe(false);
     expect(result.error).toContain('hidden');
+  });
+
+  it('refuses controls disabled by a fieldset while allowing the first legend', async () => {
+    document.body.innerHTML = `
+      <fieldset disabled>
+        <legend><input id="legend" value="unchanged" /></legend>
+        <input id="blocked" value="unchanged" />
+        <button id="button">Go</button>
+      </fieldset>`;
+    const exec = makeExecutor();
+    let clicks = 0;
+    document.getElementById('button')?.addEventListener('click', () => (clicks += 1));
+
+    const blocked = await exec.handle(
+      request({ action: 'input', target: { selector: '#blocked' }, value: 'changed' }),
+    );
+    expect(blocked.error).toContain('disabled');
+    expect((document.getElementById('blocked') as HTMLInputElement).value).toBe('unchanged');
+    const button = await exec.handle(request({ action: 'click', target: { selector: '#button' } }));
+    expect(button.error).toContain('disabled');
+    expect(clicks).toBe(0);
+
+    const legend = await exec.handle(
+      request({ action: 'input', target: { selector: '#legend' }, value: 'allowed' }),
+    );
+    expect(legend.ok).toBe(true);
+    expect((document.getElementById('legend') as HTMLInputElement).value).toBe('allowed');
+  });
+
+  it('refuses text locators inside disabled controls', async () => {
+    document.body.innerHTML = '<button disabled><span>Submit</span></button>';
+    let clicks = 0;
+    document.querySelector('button')?.addEventListener('click', () => (clicks += 1));
+    const exec = makeExecutor();
+
+    const result = await exec.handle(request({ action: 'click', target: { text: 'Submit' } }));
+
+    expect(result.error).toContain('disabled');
+    expect(clicks).toBe(0);
   });
 });
 
@@ -393,6 +433,30 @@ describe('input and select', () => {
     );
     expect(wrongTag.error).toContain('not a <select>');
   });
+
+  it.each(['blocked', 'grouped'])(
+    'refuses the disabled option %s without changing the select',
+    async (value) => {
+      document.body.innerHTML = `
+      <select id="choice">
+        <option value="allowed">Allowed</option>
+        <option value="blocked" disabled>Blocked</option>
+        <optgroup disabled label="Unavailable"><option value="grouped">Grouped</option></optgroup>
+      </select>`;
+      const select = document.getElementById('choice') as HTMLSelectElement;
+      let changes = 0;
+      select.addEventListener('change', () => (changes += 1));
+      const exec = makeExecutor();
+
+      const result = await exec.handle(
+        request({ action: 'select', target: { selector: '#choice' }, value }),
+      );
+
+      expect(result.error).toContain('disabled');
+      expect(select.value).toBe('allowed');
+      expect(changes).toBe(0);
+    },
+  );
 });
 
 describe('scroll and navigate', () => {
@@ -625,6 +689,7 @@ describe('action sequences', () => {
   });
 
   it('aborts when the user grabs the page during a waitFor poll', async () => {
+    vi.useFakeTimers();
     document.body.innerHTML = '<div id="host"></div>';
     const exec = makeExecutor({ userActivityWindowMs: 5000 });
     // The user starts typing while the sequence is still waiting for the
@@ -638,11 +703,13 @@ describe('action sequences', () => {
       document.getElementById('host')?.append(button);
     }, 150);
 
-    const result = await exec.handleSequence(
+    const pending = exec.handleSequence(
       sequence([
         { action: 'click', target: { selector: '#late' }, waitFor: { selector: '#late' } },
       ]),
     );
+    await vi.advanceTimersByTimeAsync(150);
+    const result = await pending;
 
     expect(result.ok).toBe(false);
     expect(result.stoppedAt).toBe(0);
@@ -660,5 +727,101 @@ describe('action sequences', () => {
     expect(second.ok).toBe(false);
     expect(second.error).toContain('one at a time');
     await first;
+  });
+
+  it('cancels a pending wait immediately when the user takes over', async () => {
+    vi.useFakeTimers();
+    const exec = makeExecutor();
+    const outcomes: Awaited<ReturnType<ActionExecutor['handleSequence']>>[] = [];
+    void exec
+      .handleSequence(
+        sequence([
+          { action: 'click', target: { selector: '#late' }, waitFor: { selector: '#late' } },
+        ]),
+      )
+      .then((result) => outcomes.push(result));
+
+    await vi.advanceTimersByTimeAsync(100);
+    exec.noteUserActivity();
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.stopReason).toContain('human input wins');
+    expect(outcomes[0]?.stepResults).toHaveLength(0);
+  });
+
+  it('never resumes a sequence after user activity expires during a wait', async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '<button id="submit">Submit</button>';
+    const exec = makeExecutor({ userActivityWindowMs: 1500 });
+    let clicks = 0;
+    document.getElementById('submit')?.addEventListener('click', () => (clicks += 1));
+    const pending = exec.handleSequence(
+      sequence([
+        {
+          action: 'click',
+          target: { selector: '#submit' },
+          waitFor: { selector: '#ready', state: 'attached' },
+        },
+      ]),
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    exec.noteUserActivity();
+    await vi.advanceTimersByTimeAsync(2000);
+    document.body.insertAdjacentHTML('beforeend', '<div id="ready"></div>');
+    await vi.advanceTimersByTimeAsync(150);
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    expect(result.stopReason).toContain('human input wins');
+    expect(clicks).toBe(0);
+    const retry = exec.handle(request({ action: 'click', target: { selector: '#submit' } }));
+    await vi.advanceTimersByTimeAsync(150);
+    expect((await retry).ok).toBe(true);
+    expect(clicks).toBe(1);
+  });
+
+  it('does not resume the next step after user activity expires while settling', async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '<button id="go">Go</button>';
+    const exec = makeExecutor({ userActivityWindowMs: 100, quietMs: 300 });
+    let clicks = 0;
+    document.getElementById('go')?.addEventListener('click', () => {
+      clicks += 1;
+      exec.noteUserActivity();
+    });
+    const pending = exec.handleSequence(
+      sequence([
+        { action: 'click', target: { selector: '#go' } },
+        { action: 'click', target: { selector: '#go' } },
+      ]),
+    );
+
+    await vi.advanceTimersByTimeAsync(700);
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    expect(result.stoppedAt).toBe(1);
+    expect(result.stopReason).toContain('human input wins');
+    expect(clicks).toBe(1);
+  });
+
+  it('reports cancellation when the user takes over during the final step', async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '<button id="go">Go</button>';
+    const exec = makeExecutor({ quietMs: 300 });
+    document.getElementById('go')?.addEventListener('click', exec.noteUserActivity);
+    const pending = exec.handleSequence(
+      sequence([{ action: 'click', target: { selector: '#go' } }]),
+    );
+
+    await vi.advanceTimersByTimeAsync(350);
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    expect(result.stopReason).toContain('human input wins');
+    expect(result.stepResults).toHaveLength(1);
+    expect(result.stepResults[0]?.ok).toBe(true);
   });
 });

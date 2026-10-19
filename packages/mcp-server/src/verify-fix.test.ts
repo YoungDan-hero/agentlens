@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ErrorEvent, LifecycleEvent } from '@agentlensjs/shared';
 import { EventStore } from './store';
@@ -55,6 +55,68 @@ function asResult(value: VerifyFixResult | { error: string }): VerifyFixResult {
 }
 
 describe('verifyFix', () => {
+  it('detects the same error after HMR changes its module cache URL', async () => {
+    const store = new EventStore();
+    const fingerprint = storedFingerprint(
+      store,
+      makeError({
+        timestamp: Date.now() - 1000,
+        stack: 'Error: boom\n    at render (http://localhost:5173/src/App.tsx?t=100:10:5)',
+      }),
+    );
+    const pending = verifyFix(store, fingerprint, FAST);
+    const updateAt = Date.now() + 1;
+    store.add(makeHmrUpdate(updateAt));
+    store.add(
+      makeError({
+        timestamp: updateAt + 1,
+        stack: 'Error: boom\n    at render (http://localhost:5173/src/App.tsx?t=200:10:5)',
+      }),
+    );
+
+    expect(asResult(await pending)).toMatchObject({ verified: false, recurred: true });
+  });
+
+  it('detects recurrence during the final polling interval', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new EventStore();
+      const fingerprint = storedFingerprint(store, makeError({ timestamp: Date.now() - 1000 }));
+      store.add(makeHmrUpdate(Date.now() - 500));
+      const pending = verifyFix(store, fingerprint, { quietWindowMs: 500, pollIntervalMs: 250 });
+      setTimeout(() => store.add(makeError()), 450);
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(asResult(await pending)).toMatchObject({
+        verified: false,
+        recurred: true,
+        occurrencesAfter: 2,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('detects recurrence after a reload while retaining per-session counts', async () => {
+    const store = new EventStore();
+    const oldError = makeError({ timestamp: Date.now() - 1000 });
+    const fingerprint = storedFingerprint(store, oldError);
+    store.add(makeError({ timestamp: Date.now() - 500 }));
+    const pending = verifyFix(store, fingerprint, FAST);
+    const updateAt = Date.now() + 1;
+    store.add({ ...makeHmrUpdate(updateAt), phase: 'load', sessionId: 'session-2' });
+    store.add(makeError({ timestamp: updateAt + 1, sessionId: 'session-2' }));
+
+    expect(asResult(await pending)).toMatchObject({
+      verified: false,
+      recurred: true,
+      occurrencesBefore: 2,
+      occurrencesAfter: 3,
+    });
+    expect(store.summarize(60_000, 'session-1').errorOccurrences).toBe(2);
+    expect(store.summarize(60_000, 'session-2').errorOccurrences).toBe(1);
+  });
+
   it('rejects an unknown fingerprint with a hint', async () => {
     const store = new EventStore();
     const result = await verifyFix(store, 'nope', FAST);

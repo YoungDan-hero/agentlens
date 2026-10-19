@@ -42,6 +42,7 @@ describe('installNetworkCollector', () => {
     teardown?.();
     teardown = undefined;
     globalThis.fetch = originalFetch;
+    vi.useRealTimers();
   });
 
   it('records status and duration for successful requests', async () => {
@@ -240,6 +241,56 @@ describe('installNetworkCollector', () => {
     });
 
     expect(lastNetworkEvent(events).status).toBe(200);
+  });
+
+  it("omits timed-out response bodies without consuming the caller's response", async () => {
+    vi.useFakeTimers();
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const partial = '{"token":"timeout-secret","data":"';
+    const stream = new ReadableStream<Uint8Array>({
+      start: (value) => {
+        controller = value;
+        value.enqueue(new TextEncoder().encode(partial));
+      },
+    });
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(stream, { headers: { 'content-type': 'application/json' } }),
+    );
+    const { sink, events } = createSink();
+    teardown = installNetworkCollector(sink, context, { captureBodies: true });
+
+    const response = await fetch('/api/slow');
+    await vi.advanceTimersByTimeAsync(3100);
+
+    expect(events).toHaveLength(1);
+    expect(lastNetworkEvent(events).responseBody).toBeNull();
+    controller?.enqueue(new TextEncoder().encode('done"}'));
+    controller?.close();
+    expect(await response.text()).toBe(`${partial}done"}`);
+  });
+
+  it('omits response bodies that fail after some bytes arrive', async () => {
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const stream = new ReadableStream<Uint8Array>({
+      start: (value) => {
+        controller = value;
+        value.enqueue(new TextEncoder().encode('{"token":"read-error-secret","data":"'));
+      },
+    });
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(stream, { headers: { 'content-type': 'application/json' } }),
+    );
+    const { sink, events } = createSink();
+    teardown = installNetworkCollector(sink, context, { captureBodies: true });
+
+    await fetch('/api/interrupted');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller?.error(new TypeError('response connection closed'));
+    await vi.waitFor(() => {
+      expect(events).toHaveLength(1);
+    });
+
+    expect(lastNetworkEvent(events).responseBody).toBeNull();
   });
 
   it('normalizes the opaque no-cors status 0 to null like the XHR path', async () => {

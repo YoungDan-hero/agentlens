@@ -87,9 +87,13 @@ async function readBodyBounded(clone: Response): Promise<string | null> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let text = '';
+  const readState = { timedOut: false };
   // Cancelling resolves any pending read() as done — the deadline also
   // frees the clone's buffer for streams that trickle forever.
-  const deadline = setTimeout(() => void reader.cancel(), BODY_READ_TIMEOUT_MS);
+  const deadline = setTimeout(() => {
+    readState.timedOut = true;
+    void reader.cancel();
+  }, BODY_READ_TIMEOUT_MS);
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -103,11 +107,11 @@ async function readBodyBounded(clone: Response): Promise<string | null> {
       }
     }
   } catch {
-    // Aborted mid-read: report what arrived, if anything.
+    return null;
   } finally {
     clearTimeout(deadline);
   }
-  return text === '' ? null : text;
+  return readState.timedOut || text === '' ? null : text;
 }
 
 async function readResponseBody(response: Response): Promise<string | null> {
@@ -121,7 +125,9 @@ async function readResponseBody(response: Response): Promise<string | null> {
     return `[body omitted: ${contentLength} bytes]`;
   }
   // Reading the clone leaves the caller's stream untouched.
-  return readBodyBounded(response.clone());
+  const text = await readBodyBounded(response.clone());
+  // Only actual body text is parsed; the size-omission marker above is already safe.
+  return text === null ? null : sanitizeBody(text);
 }
 
 function installFetchInterceptor(
@@ -152,7 +158,7 @@ function installFetchInterceptor(
             durationMs: Math.round(performance.now() - startedAt),
             initiatorStack,
             requestBody: requestBody === null ? null : sanitizeBody(requestBody),
-            responseBody: responseBody === null ? null : sanitizeBody(responseBody),
+            responseBody,
           }),
         );
       } catch {

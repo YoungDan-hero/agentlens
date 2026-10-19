@@ -46,8 +46,8 @@ function originOf(url: string): string | undefined {
  *    fingerprint does not recur in that window.
  *
  * Honest limitation: for interaction-triggered errors this proves only that
- * the error did not recur on its own; replaying the triggering interaction
- * is out of scope until the interaction timeline exists.
+ * the error did not recur on its own; use replay_error_path or
+ * perform_action to re-trigger the interaction for full confirmation.
  */
 export async function verifyFix(
   store: EventStore,
@@ -69,7 +69,7 @@ export async function verifyFix(
   }
 
   const startedAt = Date.now();
-  const occurrencesBefore = target.occurrences;
+  const occurrencesBefore = store.countErrorOccurrences(fingerprint);
   // Origin-scoped: an HMR in a different dev server must not count.
   const origin = originOf(target.url);
 
@@ -96,7 +96,7 @@ export async function verifyFix(
       codeUpdateApplied: false,
       recurred: false,
       occurrencesBefore,
-      occurrencesAfter: store.getErrorByFingerprint(fingerprint)?.occurrences ?? occurrencesBefore,
+      occurrencesAfter: store.countErrorOccurrences(fingerprint),
       observedForMs: Date.now() - startedAt,
       note:
         staleUpdate !== null
@@ -114,7 +114,7 @@ export async function verifyFix(
   // re-render immediately after HMR lands between the update and this poll,
   // and must count as a recurrence, not as a stale pre-update occurrence.
   const observeFrom = Date.now();
-  while (Date.now() - observeFrom < quietWindowMs) {
+  for (;;) {
     const current = store.getErrorByFingerprint(fingerprint);
     if (current && current.timestamp > codeUpdateAt) {
       return {
@@ -122,12 +122,16 @@ export async function verifyFix(
         codeUpdateApplied: true,
         recurred: true,
         occurrencesBefore,
-        occurrencesAfter: current.occurrences,
+        occurrencesAfter: store.countErrorOccurrences(fingerprint),
         observedForMs: Date.now() - startedAt,
         note: 'The error recurred after the code update — the fix did not take.',
       };
     }
-    await sleep(pollIntervalMs);
+    const remainingMs = quietWindowMs - (Date.now() - observeFrom);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(pollIntervalMs, remainingMs));
   }
 
   return {
@@ -135,7 +139,7 @@ export async function verifyFix(
     codeUpdateApplied: true,
     recurred: false,
     occurrencesBefore,
-    occurrencesAfter: store.getErrorByFingerprint(fingerprint)?.occurrences ?? occurrencesBefore,
+    occurrencesAfter: store.countErrorOccurrences(fingerprint),
     observedForMs: Date.now() - startedAt,
     note:
       'Code update applied and the error did not recur in the observation window. ' +

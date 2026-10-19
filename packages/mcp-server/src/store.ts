@@ -121,23 +121,35 @@ function matchesSource(event: AgentLensEvent, filter: string): boolean {
 }
 
 function errorFingerprint(event: ErrorEvent): string {
-  // Message plus the top raw stack frame distinguishes same-message errors
-  // thrown from different places.
-  const topFrame = event.stack?.split('\n')[1]?.trim() ?? '';
-  return `${event.subtype}|${event.message}|${topFrame}`;
+  // Cache-busting URLs change during HMR; module queries and coordinates
+  // still distinguish errors thrown from different places.
+  const topFrame = (event.stack?.split('\n')[1]?.trim() ?? '').replace(
+    /(https?:\/\/[^\s)]+)(:\d+:\d+)/,
+    (_match, moduleUrl: string, position: string) => {
+      try {
+        const url = new URL(moduleUrl);
+        url.searchParams.delete('t');
+        url.searchParams.delete('v');
+        return `${url.href}${position}`;
+      } catch {
+        return `${moduleUrl}${position}`;
+      }
+    },
+  );
+  return `${urlOrigin(event.url) ?? ''}|${event.subtype}|${event.message}|${topFrame}`;
 }
 
 /**
  * Bounded in-memory event store. Acts as the daemon's short-term memory so
  * agents can query signals that occurred before they were invoked.
  *
- * Identical errors (same fingerprint) are folded into a single record with
+ * Identical errors within a session are folded into a single record with
  * an `occurrences` counter, so an error storm inside a render loop cannot
  * flush useful signals out of the buffer.
  */
 export class EventStore {
   private events: AgentLensEvent[] = [];
-  private readonly errorsByFingerprint = new Map<string, ErrorEvent>();
+  private readonly errorsBySession = new Map<string, ErrorEvent>();
   private readonly sessions = new Map<string, SessionInfo>();
 
   constructor(private readonly capacity: number = DEFAULT_CAPACITY) {
@@ -155,15 +167,14 @@ export class EventStore {
 
     if (event.type === 'error') {
       const fingerprint = errorFingerprint(event);
-      const existing = this.errorsByFingerprint.get(fingerprint);
+      const key = JSON.stringify([event.sessionId, fingerprint]);
+      const existing = this.errorsBySession.get(key);
       if (existing) {
         existing.occurrences += event.occurrences;
         existing.timestamp = event.timestamp;
-        // The canonical record follows its latest occurrence, so a reload
-        // (new session) cannot hide a still-recurring error from
-        // session-scoped queries and health summaries.
-        existing.sessionId = event.sessionId;
         existing.url = event.url;
+        existing.stack = event.stack;
+        existing.frames = event.frames;
         // Re-insert at the newest position: `query` returns events in array
         // order (newest first), so a still-recurring error must not stay
         // buried at its first-occurrence slot where newer events would push
@@ -177,16 +188,16 @@ export class EventStore {
       }
       // Expose the identity so agents can reference this error in verify_fix.
       event.fingerprint = fingerprint;
-      this.errorsByFingerprint.set(fingerprint, event);
+      this.errorsBySession.set(key, event);
     }
 
     this.events.push(event);
     if (this.events.length > this.capacity) {
       const evicted = this.events.shift();
       if (evicted?.type === 'error') {
-        const fingerprint = errorFingerprint(evicted);
-        if (this.errorsByFingerprint.get(fingerprint) === evicted) {
-          this.errorsByFingerprint.delete(fingerprint);
+        const key = JSON.stringify([evicted.sessionId, evicted.fingerprint]);
+        if (this.errorsBySession.get(key) === evicted) {
+          this.errorsBySession.delete(key);
         }
       }
     }
@@ -222,9 +233,21 @@ export class EventStore {
     return result;
   }
 
-  /** Looks up the canonical (folded) error record by its fingerprint. */
+  /** Returns the newest session's record for a stable error fingerprint. */
   getErrorByFingerprint(fingerprint: string): ErrorEvent | undefined {
-    return this.errorsByFingerprint.get(fingerprint);
+    return this.query({ type: 'error', limit: Infinity }).find(
+      (event): event is ErrorEvent => event.type === 'error' && event.fingerprint === fingerprint,
+    );
+  }
+
+  /** Total retained occurrences, including matching errors after a reload. */
+  countErrorOccurrences(fingerprint: string): number {
+    return this.events.reduce(
+      (count, event) =>
+        count +
+        (event.type === 'error' && event.fingerprint === fingerprint ? event.occurrences : 0),
+      0,
+    );
   }
 
   /**
@@ -306,7 +329,7 @@ export class EventStore {
 
   clear(): void {
     this.events = [];
-    this.errorsByFingerprint.clear();
+    this.errorsBySession.clear();
     this.sessions.clear();
   }
 

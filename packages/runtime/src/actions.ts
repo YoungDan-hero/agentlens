@@ -60,6 +60,8 @@ const DEFAULT_QUIET_MS = 500;
 const DEFAULT_MAX_SETTLE_MS = 5000;
 const SETTLE_POLL_MS = 50;
 const HIGHLIGHT_MS = 600;
+const SEQUENCE_USER_ACTIVITY_ERROR =
+  'the user started interacting with the page; sequence aborted — human input wins';
 /** More text matches than this means the locator is too ambiguous to trust. */
 const MAX_TEXT_MATCHES = 50;
 /** Input types where typing a value makes sense. */
@@ -203,7 +205,8 @@ function checkInteractable(element: Element): string | null {
   if (!isElementVisible(element)) {
     return 'the element is inside a hidden (display:none) ancestor';
   }
-  if ('disabled' in element && (element as { disabled: unknown }).disabled === true) {
+  // A disabled fieldset can contain enabled controls in its first legend.
+  if (element.matches(':disabled') || element.closest(':disabled:not(fieldset)')) {
     return 'the element is disabled';
   }
   return null;
@@ -246,7 +249,10 @@ const MAX_WAIT_TIMEOUT_MS = 15_000;
  * Polls a wait condition until it holds or the timeout expires. Resolves
  * with null on success, an error message otherwise.
  */
-function waitForCondition(condition: WaitCondition): Promise<string | null> {
+function waitForCondition(
+  condition: WaitCondition,
+  isCancelled: () => boolean,
+): Promise<string | null> {
   if (
     condition.source === undefined &&
     condition.selector === undefined &&
@@ -258,6 +264,10 @@ function waitForCondition(condition: WaitCondition): Promise<string | null> {
   const startedAt = Date.now();
   return new Promise((resolve) => {
     const check = (): void => {
+      if (isCancelled()) {
+        resolve(SEQUENCE_USER_ACTIVITY_ERROR);
+        return;
+      }
       const holds = checkWaitCondition(condition);
       if (typeof holds === 'string') {
         resolve(holds);
@@ -417,6 +427,9 @@ function performSelect(element: Element, value: string): string | null {
     const available = options.map((option) => option.value).join(', ');
     return `no option matches "${value}" (available values: ${available})`;
   }
+  if (match.matches(':disabled')) {
+    return 'the option is disabled';
+  }
   focusTarget(element);
   setNativeValue(element, match.value);
   dispatchValueEvents(element);
@@ -452,6 +465,7 @@ export function createActionExecutor(options: ActionExecutorOptions): ActionExec
   const maxSettleMs = options.maxSettleMs ?? DEFAULT_MAX_SETTLE_MS;
 
   let lastTrustedInputAt = 0;
+  let userActivityCount = 0;
   let lastLocalEventAt = 0;
   let busy = false;
   let counting = false;
@@ -459,6 +473,7 @@ export function createActionExecutor(options: ActionExecutorOptions): ActionExec
 
   function noteUserActivity(): void {
     lastTrustedInputAt = Date.now();
+    userActivityCount += 1;
   }
 
   // Trusted-input tracking: synthetic events carry isTrusted === false, so
@@ -661,6 +676,8 @@ export function createActionExecutor(options: ActionExecutorOptions): ActionExec
   async function runSequence(request: ActionSequenceRequest): Promise<SequenceOutcome> {
     const stepResults: ActionOutcome[] = [];
     const totalEffects = zeroEffects();
+    const activityAtStart = userActivityCount;
+    const isCancelled = (): boolean => userActivityCount !== activityAtStart;
 
     // Structural refusals first — waiting or retrying will not fix these.
     if (request.steps.length === 0) {
@@ -696,13 +713,8 @@ export function createActionExecutor(options: ActionExecutorOptions): ActionExec
       // Human input wins at every step boundary: if the user started
       // interacting while the sequence was running, stop cleanly instead
       // of fighting them for the page.
-      if (userIsActive()) {
-        return sequenceStop(
-          stepResults,
-          totalEffects,
-          index,
-          'the user started interacting with the page; sequence aborted — human input wins',
-        );
+      if (isCancelled() || userIsActive()) {
+        return sequenceStop(stepResults, totalEffects, index, SEQUENCE_USER_ACTIVITY_ERROR);
       }
       if (!KNOWN_ACTIONS.has(step.action)) {
         return sequenceStop(
@@ -713,21 +725,13 @@ export function createActionExecutor(options: ActionExecutorOptions): ActionExec
         );
       }
       if (step.waitFor) {
-        const waitError = await waitForCondition(step.waitFor);
+        const waitError = await waitForCondition(step.waitFor, isCancelled);
+        if (isCancelled()) {
+          return sequenceStop(stepResults, totalEffects, index, SEQUENCE_USER_ACTIVITY_ERROR);
+        }
         if (waitError !== null) {
           stepResults.push(failure(waitError));
           return sequenceStop(stepResults, totalEffects, index, waitError);
-        }
-        // A waitFor can poll for many seconds — long enough for the user
-        // to grab the page. Re-check before executing the step, not just
-        // at the step boundary that preceded the wait.
-        if (userIsActive()) {
-          return sequenceStop(
-            stepResults,
-            totalEffects,
-            index,
-            'the user started interacting with the page; sequence aborted — human input wins',
-          );
         }
       }
       const outcome = await run(step);
@@ -735,6 +739,14 @@ export function createActionExecutor(options: ActionExecutorOptions): ActionExec
       addEffects(totalEffects, outcome.effects);
       if (!outcome.ok) {
         return sequenceStop(stepResults, totalEffects, index, outcome.error);
+      }
+      if (isCancelled()) {
+        return sequenceStop(
+          stepResults,
+          totalEffects,
+          index + 1 < request.steps.length ? index + 1 : null,
+          SEQUENCE_USER_ACTIVITY_ERROR,
+        );
       }
     }
     return sequenceStop(stepResults, totalEffects, null, null);

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import { fileURLToPath } from 'node:url';
 import type { HtmlTagDescriptor } from 'vite';
+import { createServer } from 'vite';
 import { agentlens, VIRTUAL_MODULE_ID } from './index';
 
 function callHook(hook: unknown, ...args: unknown[]): unknown {
@@ -63,6 +65,41 @@ describe('agentlens vite plugin', () => {
     expect(tags[0]?.tag).toBe('script');
     expect(tags[0]?.attrs?.src).toBe(`/@id/${VIRTUAL_MODULE_ID}`);
     expect(tags[0]?.injectTo).toBe('head');
+  });
+
+  it.each([
+    ['/', '/'],
+    ['/app/', '/app/'],
+    ['./', '/'],
+    ['', '/'],
+    ['https://example.com/app/', '/app/'],
+  ])('serves the injected runtime with base %j', async (base, resolvedBase) => {
+    const server = await createServer({
+      configFile: false,
+      root: fileURLToPath(new URL('../', import.meta.url)),
+      base,
+      plugins: [agentlens()],
+      server: { host: '127.0.0.1', port: 0 },
+      optimizeDeps: { noDiscovery: true, include: [] },
+      logLevel: 'silent',
+    });
+    try {
+      await server.listen();
+      const html = await server.transformIndexHtml(
+        resolvedBase,
+        '<html><head></head><body></body></html>',
+      );
+      expect(server.config.base).toBe(resolvedBase);
+      expect(html).toContain(`src="${resolvedBase}@id/${VIRTUAL_MODULE_ID}"`);
+
+      const response = await fetch(
+        new URL(`@id/${VIRTUAL_MODULE_ID}`, server.resolvedUrls?.local[0]),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain('const client = init(');
+    } finally {
+      await server.close();
+    }
   });
 
   it('injects nothing when disabled', () => {
