@@ -34,9 +34,9 @@
   "dependencies": {
     "@agentlensjs/runtime": "workspace:*",
     "@agentlensjs/shared": "workspace:*",
-    "@babel/parser": "^8.0.6",
-    "@vue/compiler-dom": "^3.5.43",
-    "magic-string": "^1.4.2"
+    "@babel/parser": "^8.0.7",
+    "@vue/compiler-dom": "^3.5.44",
+    "magic-string": "^1.4.3"
   },
   "peerDependencies": {
     "vite": ">=4.0.0"
@@ -57,6 +57,6 @@
     "access": "public"
   },
   "devDependencies": {
-    "vite": "^8.3.1"
+    "vite": "^8.3.4"
   }
 }
